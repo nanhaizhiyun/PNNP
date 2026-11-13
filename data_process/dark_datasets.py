@@ -38,9 +38,10 @@ class DarkFrameDataset(Dataset):
         for iso in self.isos:
             assert len(self.files[iso]) >= 2, f'ISO {iso} 暗帧不足 2 张，无法估计残差'
 
-        # 逐 ISO 的统计量（load_iso 时填充）
+        # 逐 ISO 的统计量与残差（load_iso 时填充，全部常驻内存以支持快速联合采样）
         self.mean_frames = {}      # iso -> (4, h, w) float32 均值帧（bayer packed）
         self.BLE = {}              # iso -> float 全局均值（DN）
+        self._res_all = {}         # iso -> (N, 4, h, w) float32 残差
         self._cache_iso = None
         self._cache_res = None
         log(f'DarkFrameDataset: ISO list = {self.isos}')
@@ -57,8 +58,10 @@ class DarkFrameDataset(Dataset):
         self.args['max_frames_per_iso'] = 0
 
     def load_iso(self, iso):
-        """加载某个 ISO 的全部暗帧并计算均值帧与残差（只缓存当前 ISO）。"""
-        if self._cache_iso == iso:
+        """加载某个 ISO 的全部暗帧并计算均值帧与残差（常驻缓存，重复调用直接命中）。"""
+        if iso in self._res_all:
+            self._cache_iso = iso
+            self._cache_res = self._res_all[iso]
             return
         H, W = self.args['H'], self.args['W']
         stack = []
@@ -76,8 +79,9 @@ class DarkFrameDataset(Dataset):
         res = res * (1.0 / np.sqrt(1.0 - 1.0 / N))
         self.mean_frames[iso] = mean_frame
         self.BLE[iso] = float(mean_frame.mean())
+        self._res_all[iso] = res.astype(np.float32)
         self._cache_iso = iso
-        self._cache_res = res.astype(np.float32)
+        self._cache_res = self._res_all[iso]
 
     def sample_residual(self, iso, patch_size=None):
         """随机取一张暗帧的残差 patch，返回 (4, 1, ps, ps) float32 tensor（DN 单位）。"""

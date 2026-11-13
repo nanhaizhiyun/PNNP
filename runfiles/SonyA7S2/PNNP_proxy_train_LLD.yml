@@ -1,0 +1,45 @@
+mode: 'trainproxy'
+checkpoint: 'saved_model/SonyA7S2'
+fast_ckpt: 'checkpoints/SonyA7S2'
+model_name: 'pw_iso_lld'           # 与官方权重区分开
+result_dir: 'images/'
+num_workers: 0
+
+dst:
+  bias_dir: 'SonyA7S2/bias'          # LLD 暗帧转换后的 npy：<ISO>/frame_XXXX.npy
+  ds_dir: 'SonyA7S2/resources-lld'   # 标定产物（不覆盖官方 resources-old）
+  camera_type: 'SonyA7S2'
+  H: 2848
+  W: 4256
+  wp: 16383
+  bl: 512
+  iso_threshold: 1600
+  patch_size: 1024
+  remove_frame_mean: True
+  max_frames_per_iso: 0
+
+arch_proxy:
+  name: 'pw_iso_lld'
+  ISO2K: [0.0009546, -0.00193]
+  H: 2848
+  W: 4256
+  in_nc: 1
+  out_nc: 1
+  nf: 16
+  nb: 2
+  nframes: 1
+  d: 1024
+  mode: '2stage+iso'
+  act: 'swish'
+  noise_code: 'pr'
+
+hyper:
+  learning_rate: 1.0e-2
+  min_learning_rate: 1.0e-5
+  steps_per_iso: 1000
+  cycles: 1
+  query_points: 1000
+  w_quantile: 1.0
+  w_cdf: 1.0
+  log_freq: 100
+  seed: 0

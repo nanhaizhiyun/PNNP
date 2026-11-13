@@ -25,6 +25,7 @@ import time
 import argparse
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.optim import Adam
 from torch.optim.lr_scheduler import LambdaLR
 from data_process import *
@@ -83,17 +84,46 @@ class PNNP_Proxy_Trainer():
         return net
 
     def ddl_loss(self, output, gt):
-        """可微分分布损失：分位数损失 + CDF 损失（标准化到单位方差后计算）。"""
+        """可微分分布损失：分位数损失 + CDF 损失（标准化到单位方差后计算）。
+
+        实现说明：torch.quantile 在百万级样本×上千分位点下极慢（实测 65s/step），
+        且论文明确说明"排序保持梯度可微"。因此单次 sort 后做插值，同时服务
+        分位数损失（在概率位置插值 sorted 样本）与 CDF 损失（在数值点插值
+        经验 CDF），与 archs/PNNP.py 的 QuantileLoss/CDFLoss 数学等价。
+        """
         scale = gt.std().detach()
-        out_n, gt_n = output / scale, gt / scale
-        lq = QuantileLoss(out_n.reshape(1, -1), gt_n.reshape(1, -1), self.x_quant.to(self.device))
-        lc = CDFLoss(out_n, gt_n, self.x_cdf.to(self.device))
+        out = (output / scale).reshape(-1)
+        tar = (gt / scale).reshape(-1)
+        s_out, _ = torch.sort(out)
+        s_gt, _ = torch.sort(tar)
+        n = s_out.numel()
+
+        # 分位数损失: F^-1(p) = sorted 在位置 p*(n-1) 的线性插值
+        pos = (self.x_quant.to(self.device) * (n - 1)).clamp(0, n - 1)
+        i0 = pos.floor().long()
+        w = pos - i0.float()
+        i1 = (i0 + 1).clamp(max=n - 1)
+        q_out = s_out[i0] * (1 - w) + s_out[i1] * w
+        q_gt = s_gt[i0] * (1 - w) + s_gt[i1] * w
+        lq = F.l1_loss(q_out, q_gt)
+
+        # CDF 损失: F(q) = searchsorted + 线性插值
+        def cdf_interp(s, x):
+            idx = torch.searchsorted(s, x).clamp(1, n - 1)
+            sl, sr = s[idx - 1], s[idx]
+            frac = (x - sl) / (sr - sl).clamp_min(1e-12)
+            return (idx - 1 + frac) / (n - 1)
+        lc = F.l1_loss(cdf_interp(s_out, self.x_cdf.to(self.device)),
+                       cdf_interp(s_gt, self.x_cdf.to(self.device)))
         return lq, lc
 
     def train_branch(self, branch, isos):
         """训练一个 ISO 分支（如 lowISO），逐 ISO 训练 steps_per_iso 步。"""
         log(f'==== Train branch {branch}: ISOs {isos} ====', log=self.logfile)
         net = self.build_proxy()
+        # 预加载分支内全部 ISO 的暗帧残差（常驻内存，避免逐步骤换 ISO 反复读盘）
+        for iso in isos:
+            self.dstset.load_iso(iso)
         # 先保存该分支的标定产物（darkshading k/b + BLE）
         self.dstset.calibrate(isos, self.dst['ds_dir'], tag=branch)
 
