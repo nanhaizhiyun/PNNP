@@ -5,6 +5,7 @@ from .syn_datasets import *
 # from .raw2rgb_datasets import *
 from .phone_datasets import *
 from .proxy import *
+from .dark_datasets import *
 
 class MultiDataset(Dataset):
     def __init__(self, dstname_list, args):

@@ -1,0 +1,45 @@
+mode: 'trainproxy'
+checkpoint: 'saved_model/SonyA7S2'
+fast_ckpt: 'checkpoints/SonyA7S2'
+model_name: 'pw_iso_2stage'
+result_dir: 'images/'
+num_workers: 0
+
+dst:
+  bias_dir: 'SonyA7S2/bias'          # <ISO>/*.ARW（或 *.npy）结构，暗帧
+  ds_dir: 'SonyA7S2/resources-new'   # 标定产物输出目录（darkshading k/b + BLE）
+  camera_type: 'SonyA7S2'
+  H: 2848
+  W: 4256
+  wp: 16383
+  bl: 512
+  iso_threshold: 1600                # 双原生 ISO 分支分界（<=lowISO, >highISO）
+  patch_size: 1024                   # 论文设置：每步随机裁剪 1024x1024
+  remove_frame_mean: True            # 去除每帧全局均值（frame-wise 分量）
+  max_frames_per_iso: 0              # 0 = 使用该 ISO 下全部暗帧（论文每 ISO 5 帧）
+
+arch_proxy:
+  name: 'pw_iso_2stage'
+  ISO2K: [0.0009546, -0.00193]       # shot noise 增益 K(ISO)，标定所得，训练时固定
+  H: 2848
+  W: 4256
+  in_nc: 1
+  out_nc: 1
+  nf: 16
+  nb: 2
+  nframes: 1
+  d: 1024
+  mode: '2stage+iso'
+  act: 'swish'
+  noise_code: 'pr'
+
+hyper:
+  learning_rate: 1.0e-2              # 论文设置：SGDR base 1e-2 -> min 1e-5
+  min_learning_rate: 1.0e-5
+  steps_per_iso: 1000                # 论文设置：每 ISO 1000 步
+  cycles: 1
+  query_points: 1000                 # DDL 查询点数量
+  w_quantile: 1.0
+  w_cdf: 1.0
+  log_freq: 100
+  seed: 0
