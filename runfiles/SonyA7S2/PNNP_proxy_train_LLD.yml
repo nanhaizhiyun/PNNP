@@ -17,6 +17,7 @@ dst:
   patch_size: 1024
   remove_frame_mean: True
   max_frames_per_iso: 0
+  hot_pixel_k: 10.0          # 时间std > 10×中位数 判定为热像素，训练/统计时剔除
 
 arch_proxy:
   name: 'pw_iso_lld'

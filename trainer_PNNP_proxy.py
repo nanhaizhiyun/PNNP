@@ -83,17 +83,22 @@ class PNNP_Proxy_Trainer():
         net.ISO2K_require_grad(False, ISO2K=self.arch_proxy['ISO2K'])
         return net
 
-    def ddl_loss(self, output, gt):
+    def ddl_loss(self, output, gt, mask=None):
         """可微分分布损失：分位数损失 + CDF 损失（标准化到单位方差后计算）。
 
+        热像素掩膜：mask 为 True 的像素不参与损失（热像素破坏 i.i.d. 假设）。
         实现说明：torch.quantile 在百万级样本×上千分位点下极慢（实测 65s/step），
         且论文明确说明"排序保持梯度可微"。因此单次 sort 后做插值，同时服务
         分位数损失（在概率位置插值 sorted 样本）与 CDF 损失（在数值点插值
         经验 CDF），与 archs/PNNP.py 的 QuantileLoss/CDFLoss 数学等价。
         """
-        scale = gt.std().detach()
-        out = (output / scale).reshape(-1)
-        tar = (gt / scale).reshape(-1)
+        out = output.reshape(-1)
+        tar = gt.reshape(-1)
+        if mask is not None:
+            keep = ~mask.reshape(-1)
+            out, tar = out[keep], tar[keep]
+        scale = tar.std().detach()
+        out, tar = out / scale, tar / scale
         s_out, _ = torch.sort(out)
         s_gt, _ = torch.sort(tar)
         n = s_out.numel()
@@ -148,17 +153,18 @@ class PNNP_Proxy_Trainer():
                 out_std_log, gt_std_log = [], []
                 optimizer.zero_grad()
                 for iso in isos:
-                    gt = self.dstset.sample_residual(iso, ps).to(self.device)
+                    gt, hot = self.dstset.sample_pair(iso, ps)
+                    gt, hot = gt.to(self.device), hot.to(self.device)
                     p = {'ISO': iso, 'shape': (4, 1, ps, ps), 'device': self.device, 'noise_code': noise_code}
                     output = net.proxy_pixel(p)
-                    lq, lc = self.ddl_loss(output, gt)
+                    lq, lc = self.ddl_loss(output, gt, hot)
                     loss = self.hyper.get('w_quantile', 1.0) * lq + self.hyper.get('w_cdf', 1.0) * lc
                     (loss / len(isos)).backward()  # 梯度累加（等价于平均损失）
                     loss_acc += loss.item() / len(isos)
                     lq_acc += lq.item() / len(isos)
                     lc_acc += lc.item() / len(isos)
                     out_std_log.append(f'{iso}:{output.std().item():.2f}')
-                    gt_std_log.append(f'{iso}:{gt.std().item():.2f}')
+                    gt_std_log.append(f'{iso}:{gt[~hot.reshape(gt.shape)].std().item():.2f}')
                 optimizer.step()
                 scheduler.step()
                 if step % self.hyper.get('log_freq', 100) == 0 or step == 1:
@@ -167,16 +173,20 @@ class PNNP_Proxy_Trainer():
                         f'out_std[{" ".join(out_std_log)}] gt_std[{" ".join(gt_std_log)}] '
                         f'lr={scheduler.get_last_lr()[0]:.2e} '
                         f'({(time.time() - time_start) / step:.2f}s/step)', log=self.logfile)
-            # 分支训完后对所有 ISO 做分布校验（防止遗忘）
+            # 分支训完后对所有 ISO 做分布校验（防止遗忘；统计剔除热像素）
             net.eval()
             with torch.no_grad():
                 for iso in isos:
                     p = {'ISO': iso, 'shape': (4, 1, ps, ps), 'device': self.device, 'noise_code': noise_code}
                     out = net.proxy_pixel(p).reshape(-1).cpu().numpy()
-                    gt_all = self.dstset.sample_residual(iso, ps).reshape(-1).numpy()
-                    log(f'[{branch} ISO{iso}] check: out_std={out.std():.3f} gt_std={gt_all.std():.3f} | '
+                    gt_np, hot_np = self.dstset.sample_pair(iso, ps)
+                    gt_all = gt_np.reshape(-1).numpy()
+                    hot_np = hot_np.reshape(-1).numpy()
+                    gt_keep = gt_all[~hot_np]
+                    log(f'[{branch} ISO{iso}] check: out_std={out.std():.3f} gt_std(掩膜后)={gt_keep.std():.3f} '
+                        f'gt_std(原始)={gt_all.std():.3f} 热像素={self.dstset.hot_ratios.get(iso, 0)*100:.4f}% | '
                         f'out_q1/q99={np.quantile(out, 0.01):.2f}/{np.quantile(out, 0.99):.2f} '
-                        f'gt_q1/q99={np.quantile(gt_all, 0.01):.2f}/{np.quantile(gt_all, 0.99):.2f}',
+                        f'gt_q1/q99={np.quantile(gt_keep, 0.01):.2f}/{np.quantile(gt_keep, 0.99):.2f}',
                         log=self.logfile)
 
         save_path = os.path.join(self.fast_ckpt, f'{self.model_name}_{branch}.pth')

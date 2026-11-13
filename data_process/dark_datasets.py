@@ -42,6 +42,8 @@ class DarkFrameDataset(Dataset):
         self.mean_frames = {}      # iso -> (4, h, w) float32 均值帧（bayer packed）
         self.BLE = {}              # iso -> float 全局均值（DN）
         self._res_all = {}         # iso -> (N, 4, h, w) float32 残差
+        self.hot_masks = {}        # iso -> (4, h, w) bool 热像素掩膜（True=热像素）
+        self.hot_ratios = {}       # iso -> float 热像素占比
         self._cache_iso = None
         self._cache_res = None
         log(f'DarkFrameDataset: ISO list = {self.isos}')
@@ -56,6 +58,7 @@ class DarkFrameDataset(Dataset):
         self.args['patch_size'] = 1024
         self.args['remove_frame_mean'] = True
         self.args['max_frames_per_iso'] = 0
+        self.args['hot_pixel_k'] = 10.0     # 时间std > k*中位数 判定为热像素；0=关闭
 
     def load_iso(self, iso):
         """加载某个 ISO 的全部暗帧并计算均值帧与残差（常驻缓存，重复调用直接命中）。"""
@@ -77,6 +80,18 @@ class DarkFrameDataset(Dataset):
         # 在 i.i.d. 假设下乘 1/sqrt(1-1/N) 还原真实噪声标准差（N 小时间题显著，如 N=5 收缩 10.6%）
         N = stack.shape[0]
         res = res * (1.0 / np.sqrt(1.0 - 1.0 / N))
+        # 热像素检测：暗帧中位置固定、时间波动远大于普通读噪声的像素，
+        # 破坏 i.i.d. 假设且显著拉高 std/尾部，需掩膜剔除
+        k = self.args.get('hot_pixel_k', 0.0)
+        if k > 0:
+            tstd = res.std(axis=0)                      # (4, h, w) 逐像素时间std
+            med = np.median(tstd)
+            hot = tstd > k * med
+        else:
+            hot = np.zeros(res.shape[1:], dtype=bool)
+        self.hot_masks[iso] = hot
+        self.hot_ratios[iso] = float(hot.mean())
+        log(f'ISO{iso}: 热像素 {hot.sum()} px ({self.hot_ratios[iso]*100:.4f}%, k={k})')
         self.mean_frames[iso] = mean_frame
         self.BLE[iso] = float(mean_frame.mean())
         self._res_all[iso] = res.astype(np.float32)
@@ -85,6 +100,14 @@ class DarkFrameDataset(Dataset):
 
     def sample_residual(self, iso, patch_size=None):
         """随机取一张暗帧的残差 patch，返回 (4, 1, ps, ps) float32 tensor（DN 单位）。"""
+        crop, _ = self.sample_pair(iso, patch_size)
+        return crop
+
+    def sample_pair(self, iso, patch_size=None):
+        """同 sample_residual，但额外返回热像素掩膜 patch（True=热像素）。
+
+        返回 (crop, mask)，均为 (4, 1, ps, ps)；未启用热像素检测时 mask 全 False。
+        """
         self.load_iso(iso)
         ps = patch_size or self.args['patch_size']
         res = self._cache_res  # (N, 4, h, w)
@@ -94,7 +117,9 @@ class DarkFrameDataset(Dataset):
         x = np.random.randint(h - ps + 1)
         y = np.random.randint(w - ps + 1)
         crop = res[i, :, x:x + ps, y:y + ps]
-        return torch.from_numpy(crop).unsqueeze(1)  # (4, 1, ps, ps)
+        mask = self.hot_masks[iso][:, x:x + ps, y:y + ps]
+        return (torch.from_numpy(crop).unsqueeze(1),
+                torch.from_numpy(mask).unsqueeze(1))
 
     def calibrate(self, isos, ds_dir, tag='lowISO'):
         """拟合 darkshading 线性模型并保存（与官方 resources 格式兼容）。
@@ -110,7 +135,8 @@ class DarkFrameDataset(Dataset):
         H, W = self.args['H'], self.args['W']
         # 联立所有 ISO 逐像素最小二乘: D(iso) ≈ k*iso + b
         A = np.stack([np.array(isos, dtype=np.float64), np.ones(len(isos))], axis=1)  # (n_iso, 2)
-        M = np.stack([self.mean_frames[iso] - self.BLE[iso] for iso in isos])  # (n_iso, 4, h, w)
+        M = np.stack([self._fill_hot(self.mean_frames[iso], self.hot_masks.get(iso))
+                      - self.BLE[iso] for iso in isos])  # (n_iso, 4, h, w)
         coef = np.linalg.pinv(A) @ M.reshape(len(isos), -1)  # (2, 4*h*w)
         k_map = self._unpack(coef[0].reshape(4, H // 2, W // 2).astype(np.float64), H, W)
         b_map = self._unpack(coef[1].reshape(4, H // 2, W // 2).astype(np.float64), H, W)
@@ -125,6 +151,15 @@ class DarkFrameDataset(Dataset):
         with open(ble_path, 'wb') as f:
             pickle.dump(ble, f)
         log(f'Calibration saved to {ds_dir}: k/b ({tag}), BLE ({len(ble)} ISOs)')
+
+    @staticmethod
+    def _fill_hot(mean_frame, hot):
+        """均值帧中热像素位置用 5x5 中值滤波值填充（未掩膜时原样返回）。"""
+        if hot is None or not hot.any():
+            return mean_frame
+        from scipy.ndimage import median_filter
+        filled = median_filter(mean_frame, size=(1, 5, 5))
+        return np.where(hot, filled, mean_frame)
 
     @staticmethod
     def _unpack(packed, H, W):
