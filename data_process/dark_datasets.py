@@ -70,6 +70,10 @@ class DarkFrameDataset(Dataset):
         res = stack - mean_frame
         if self.args['remove_frame_mean']:
             res = res - res.mean(axis=(2, 3), keepdims=True)
+        # 样本均值收缩修正：residual = x_i - x̄ 的方差为 σ²(1-1/N)，
+        # 在 i.i.d. 假设下乘 1/sqrt(1-1/N) 还原真实噪声标准差（N 小时间题显著，如 N=5 收缩 10.6%）
+        N = stack.shape[0]
+        res = res * (1.0 / np.sqrt(1.0 - 1.0 / N))
         self.mean_frames[iso] = mean_frame
         self.BLE[iso] = float(mean_frame.mean())
         self._cache_iso = iso

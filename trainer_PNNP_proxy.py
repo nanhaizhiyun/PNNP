@@ -104,32 +104,43 @@ class PNNP_Proxy_Trainer():
         noise_code = self.arch_proxy['noise_code']
 
         for cycle in range(self.hyper.get('cycles', 1)):
-            for iso in isos:
-                optimizer = Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=lr_max)
-                # LambdaLR 以 base lr 为基准做乘法，lambda 需返回比例
-                scheduler = LambdaLR(optimizer,
-                                     lambda t: (lr_min + 0.5 * (lr_max - lr_min) * (1 + np.cos(np.pi * t / steps))) / lr_max)
-                net.train()
-                time_start = time.time()
-                for step in range(1, steps + 1):
+            # 联合训练：每步把分支内所有 ISO 各采一个 patch，梯度累加后统一更新。
+            # 逐 ISO 串行全参数训练会导致灾难性遗忘（网络只记住最后训练的 ISO），
+            # K(ISO) 增益分解需要在所有 ISO 上同时约束才能解耦。
+            optimizer = Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=lr_max)
+            # LambdaLR 以 base lr 为基准做乘法，lambda 需返回比例
+            scheduler = LambdaLR(optimizer,
+                                 lambda t: (lr_min + 0.5 * (lr_max - lr_min) * (1 + np.cos(np.pi * t / steps))) / lr_max)
+            net.train()
+            time_start = time.time()
+            for step in range(1, steps + 1):
+                loss_acc, lq_acc, lc_acc = 0.0, 0.0, 0.0
+                out_std_log, gt_std_log = [], []
+                optimizer.zero_grad()
+                for iso in isos:
                     gt = self.dstset.sample_residual(iso, ps).to(self.device)
                     p = {'ISO': iso, 'shape': (4, 1, ps, ps), 'device': self.device, 'noise_code': noise_code}
                     output = net.proxy_pixel(p)
                     lq, lc = self.ddl_loss(output, gt)
                     loss = self.hyper.get('w_quantile', 1.0) * lq + self.hyper.get('w_cdf', 1.0) * lc
-                    optimizer.zero_grad()
-                    loss.backward()
-                    optimizer.step()
-                    scheduler.step()
-                    if step % self.hyper.get('log_freq', 100) == 0 or step == 1:
-                        log(f'[{branch} ISO{iso} c{cycle} step {step}/{steps}] '
-                            f'loss={loss.item():.4f} (q={lq.item():.4f}, cdf={lc.item():.4f}) '
-                            f'out_std={output.std().item():.3f} gt_std={gt.std().item():.3f} '
-                            f'lr={scheduler.get_last_lr()[0]:.2e} '
-                            f'({(time.time() - time_start) / step:.2f}s/step)', log=self.logfile)
-                # 每个 ISO 训完后做一次分布校验
-                net.eval()
-                with torch.no_grad():
+                    (loss / len(isos)).backward()  # 梯度累加（等价于平均损失）
+                    loss_acc += loss.item() / len(isos)
+                    lq_acc += lq.item() / len(isos)
+                    lc_acc += lc.item() / len(isos)
+                    out_std_log.append(f'{iso}:{output.std().item():.2f}')
+                    gt_std_log.append(f'{iso}:{gt.std().item():.2f}')
+                optimizer.step()
+                scheduler.step()
+                if step % self.hyper.get('log_freq', 100) == 0 or step == 1:
+                    log(f'[{branch} c{cycle} step {step}/{steps}] '
+                        f'loss={loss_acc:.4f} (q={lq_acc:.4f}, cdf={lc_acc:.4f}) '
+                        f'out_std[{" ".join(out_std_log)}] gt_std[{" ".join(gt_std_log)}] '
+                        f'lr={scheduler.get_last_lr()[0]:.2e} '
+                        f'({(time.time() - time_start) / step:.2f}s/step)', log=self.logfile)
+            # 分支训完后对所有 ISO 做分布校验（防止遗忘）
+            net.eval()
+            with torch.no_grad():
+                for iso in isos:
                     p = {'ISO': iso, 'shape': (4, 1, ps, ps), 'device': self.device, 'noise_code': noise_code}
                     out = net.proxy_pixel(p).reshape(-1).cpu().numpy()
                     gt_all = self.dstset.sample_residual(iso, ps).reshape(-1).numpy()
