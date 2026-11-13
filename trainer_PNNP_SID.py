@@ -409,8 +409,9 @@ class PNNP_SID_Trainer(Base_Trainer):
                     data['ratio'][i] = noise_param['ratio']
                     noise_param['shape'] = (4, 1, d, d)
                     proxy_net = self.PNNP_highISO if noise_param['ISO']>1600 else self.PNNP_lowISO
-                    imgs_lr[i] = generate_noisy_proxy(proxy_net, y=imgs_lr[i], param=noise_param, 
-                                    noise_code=self.dst['noise_code'], ori=self.dst['ori'])
+                    imgs_lr[i] = generate_noisy_proxy(proxy_net, y=imgs_lr[i], param=noise_param,
+                                    noise_code=self.dst['noise_code'], ori=self.dst['ori'],
+                                    camera_type=self.dst['camera_type'])
             elif self.args['dst_train']['dataset'] == 'NF_Syn_Dataset':
                 d = self.dst['patch_size']
                 data['ratio'] = torch.ones(b, dtype=torch.float32, device=self.device)
