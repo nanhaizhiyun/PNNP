@@ -124,19 +124,25 @@ class DarkFrameDataset(Dataset):
     def calibrate(self, isos, ds_dir, tag='lowISO'):
         """拟合 darkshading 线性模型并保存（与官方 resources 格式兼容）。
 
-        mean_frame(iso) ≈ k * iso + b + BLE[iso]
-        产物：darkshading_BLE.pkl（dict: iso -> float，含全部已加载 ISO）
-              darkshading_{tag}_k.npy / _b.npy（float64, H x W 未打包格式）
+        约定（与官方 resources-old 一致，已验证）：
+            BLE[iso]   = mean(mean_frame) - bl          # 黑电平之上的偏置误差
+            darkshading = k*iso + b + BLE[iso] = mean_frame - bl
+        即 darkshading 为去除标称黑电平后的近零均值空间 pattern。
+        评估时 lr_raw - darkshading 即完成黑电平+FPN 校正；
+        若 BLE 含黑电平本身（~512 DN），评估输入会被整体拉飞（实测灾难）。
         """
         os.makedirs(ds_dir, exist_ok=True)
         isos = sorted(isos)
         for iso in isos:
             self.load_iso(iso)
         H, W = self.args['H'], self.args['W']
-        # 联立所有 ISO 逐像素最小二乘: D(iso) ≈ k*iso + b
+        bl = float(self.args['bl'])
+        # BLE = 黑电平之上的偏置；拟合目标 = 均值帧 - bl（近零均值）
+        for iso in isos:
+            self.BLE[iso] = float(self.mean_frames[iso].mean()) - bl
         A = np.stack([np.array(isos, dtype=np.float64), np.ones(len(isos))], axis=1)  # (n_iso, 2)
         M = np.stack([self._fill_hot(self.mean_frames[iso], self.hot_masks.get(iso))
-                      - self.BLE[iso] for iso in isos])  # (n_iso, 4, h, w)
+                      - bl - self.BLE[iso] for iso in isos])  # (n_iso, 4, h, w)
         coef = np.linalg.pinv(A) @ M.reshape(len(isos), -1)  # (2, 4*h*w)
         k_map = self._unpack(coef[0].reshape(4, H // 2, W // 2).astype(np.float64), H, W)
         b_map = self._unpack(coef[1].reshape(4, H // 2, W // 2).astype(np.float64), H, W)
