@@ -120,7 +120,10 @@ class PNNP_Proxy_Trainer():
             return (idx - 1 + frac) / (n - 1)
         lc = F.l1_loss(cdf_interp(s_out, self.x_cdf.to(self.device)),
                        cdf_interp(s_gt, self.x_cdf.to(self.device)))
-        return lq, lc
+        # 显式方差匹配：DDL 的分位数损失对整体尺度收敛较慢时，
+        # 小权重 std 项直接消除系统性 std 欠拟合（梯度经 std 回传）
+        lstd = (out.std() - tar.std()).abs() / tar.std().detach()
+        return lq, lc, lstd
 
     def train_branch(self, branch, isos):
         """训练一个 ISO 分支（如 lowISO），逐 ISO 训练 steps_per_iso 步。"""
@@ -157,8 +160,10 @@ class PNNP_Proxy_Trainer():
                     gt, hot = gt.to(self.device), hot.to(self.device)
                     p = {'ISO': iso, 'shape': (4, 1, ps, ps), 'device': self.device, 'noise_code': noise_code}
                     output = net.proxy_pixel(p)
-                    lq, lc = self.ddl_loss(output, gt, hot)
-                    loss = self.hyper.get('w_quantile', 1.0) * lq + self.hyper.get('w_cdf', 1.0) * lc
+                    lq, lc, lstd = self.ddl_loss(output, gt, hot)
+                    loss = (self.hyper.get('w_quantile', 1.0) * lq
+                            + self.hyper.get('w_cdf', 1.0) * lc
+                            + self.hyper.get('w_std', 0.0) * lstd)
                     (loss / len(isos)).backward()  # 梯度累加（等价于平均损失）
                     loss_acc += loss.item() / len(isos)
                     lq_acc += lq.item() / len(isos)
