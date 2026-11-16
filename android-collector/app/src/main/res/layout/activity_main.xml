@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:padding="24dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="PNNP 数据采集"
+        android:textSize="22sp"
+        android:textStyle="bold"
+        android:gravity="center" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="32dp"
+        android:text="为 PNNP 噪声建模与去噪训练采集 raw 数据"
+        android:textSize="14sp"
+        android:gravity="center" />
+
+    <Button
+        android:id="@+id/btnGt"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="GT 采集（干净图像）" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:layout_marginBottom="24dp"
+        android:text="暗室多帧平均 / 亮环境低ISO直拍，供去噪网络学习图像内容"
+        android:textSize="12sp"
+        android:gravity="center" />
+
+    <Button
+        android:id="@+id/btnDark"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="暗帧采集（噪声标定）" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="盖镜头，多 ISO × 曝光网格连拍，供 PNNP 学习噪声模型"
+        android:textSize="12sp"
+        android:gravity="center" />
+</LinearLayout>
