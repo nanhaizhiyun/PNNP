@@ -1,0 +1,47 @@
+mode: 'trainproxy'
+checkpoint: 'saved_model/PNC460'
+fast_ckpt: 'checkpoints/PNC460'
+model_name: 'pw_iso_pnc460'
+result_dir: 'images/'
+num_workers: 0
+
+dst:
+  bias_dir: 'PNC460/bias'          # <ISO>/*.dng（App 输出，混合曝光，暗电流可忽略）
+  ds_dir: 'PNC460/resources'       # 标定产物输出
+  camera_type: 'PNC460'
+  H: 3072
+  W: 4096
+  wp: 1023
+  bl: 64
+  iso_threshold: 999999            # 单原生 ISO：只训 lowISO 分支
+  patch_size: 1024
+  remove_frame_mean: True
+  max_frames_per_iso: 0            # 45 帧/ISO（3 曝光 × 15），暗电流已验证可忽略
+  hot_pixel_k: 10.0
+
+arch_proxy:
+  name: 'pw_iso_pnc460'
+  ISO2K: [0.0158, 0.0]             # 占位（Sony 满阱比例缩放），下游合成前需 PTC 标定
+  H: 3072
+  W: 4096
+  in_nc: 1
+  out_nc: 1
+  nf: 16
+  nb: 2
+  nframes: 1
+  d: 1024
+  mode: '2stage+iso'
+  act: 'swish'
+  noise_code: 'pr'
+
+hyper:
+  learning_rate: 1.0e-2
+  min_learning_rate: 1.0e-5
+  steps_per_iso: 1000
+  cycles: 3
+  query_points: 1000
+  w_quantile: 1.0
+  w_cdf: 1.0
+  w_std: 0.1
+  log_freq: 100
+  seed: 0

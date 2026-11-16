@@ -472,7 +472,9 @@ class PNNP_SID_Trainer(Base_Trainer):
     def load_proxynet(self):
         self.proxy = self.args['arch_proxy']
         self.proxy['noise_code'] = self.dst["noise_code"]
-        self.proxy['ds_dir'] = self.dst["ds_dir"]
+        # arch_proxy 显式给出 ds_dir 时优先（跨 sensor 合成：代理 FPN pattern 与
+        # 评估标定可来自不同相机/尺寸），否则沿用数据集标定目录
+        self.proxy['ds_dir'] = self.proxy.get('ds_dir', self.dst["ds_dir"])
         # SonyA7S2 是双原生 ISO 传感器，这里按 lowISO/highISO 加载两段已训练 PNNP。
         # 公开版本只使用这些权重生成训练噪声，不包含 PNNP 本体训练过程。
         proxy_name = self.proxy['name']
