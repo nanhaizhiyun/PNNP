@@ -48,7 +48,22 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
+        android:layout_marginBottom="24dp"
         android:text="盖镜头，多 ISO × 曝光网格连拍，供 PNNP 学习噪声模型"
+        android:textSize="12sp"
+        android:gravity="center" />
+
+    <Button
+        android:id="@+id/btnFlat"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="平场采集（K 值标定）" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="对均匀表面，逐 ISO 扫曝光网格，PTC 拟合 shot noise 增益"
         android:textSize="12sp"
         android:gravity="center" />
 </LinearLayout>

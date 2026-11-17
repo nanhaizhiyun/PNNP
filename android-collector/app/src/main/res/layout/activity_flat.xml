@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="12dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="平场采集（PTC 标定 shot noise 增益 K）\n输出: DarkFrameCollector/<时间戳>/flat/ISO{iso}/*.dng\n对准均匀表面（白墙/匀光板），全程保持光照恒定"
+        android:textSize="12sp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="曝光网格模式" />
+    <Spinner
+        android:id="@+id/spMode"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="ISO 列表（逗号分隔，每个 ISO 扫一遍网格）" />
+    <EditText
+        android:id="@+id/etIsos"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="100,200,400,800,1550"
+        android:textSize="13sp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="起始曝光 ms" />
+    <EditText
+        android:id="@+id/etExpStart"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="0.5"
+        android:inputType="numberDecimal"
+        android:textSize="13sp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="结束曝光 ms（自动模式忽略，扫到 0.7×白电平自动停止）" />
+    <EditText
+        android:id="@+id/etExpEnd"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="200"
+        android:inputType="numberDecimal"
+        android:textSize="13sp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="网格步数（自动模式忽略）" />
+    <EditText
+        android:id="@+id/etSteps"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="15"
+        android:inputType="number"
+        android:textSize="13sp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="每档帧数（PTC 建议 ≥10）" />
+    <EditText
+        android:id="@+id/etFrames"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="10"
+        android:inputType="number"
+        android:textSize="13sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+        <Button
+            android:id="@+id/btnPreset"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="PTC 预设" />
+        <Button
+            android:id="@+id/btnStart"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="开始采集" />
+        <Button
+            android:id="@+id/btnStop"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:enabled="false"
+            android:text="停止" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/tvProgress"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:text="就绪"
+        android:textSize="13sp" />
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="6dp">
+        <TextView
+            android:id="@+id/tvLog"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="11sp"
+            android:typeface="monospace" />
+    </ScrollView>
+</LinearLayout>

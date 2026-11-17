@@ -12,6 +12,11 @@ import android.util.Log
 import android.util.Size
 import android.view.WindowManager
 import android.widget.Toast
+import android.app.AlertDialog
+import android.graphics.Bitmap
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.TextView
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -322,6 +327,169 @@ abstract class BaseCaptureActivity : Activity() {
         logUi("元数据: ${File(dir, "session.json").absolutePath}")
     }
 
+    // ---------------- 抓拍测试 ----------------
+
+    /** 以界面指定的 ISO/曝光手动抓拍一帧 RAW（与正式采集一致的锁定项），评估亮度并弹窗显示缩略图 */
+    protected fun captureTestShot(iso: Int?, expMs: Double?) {
+        if (iso == null || iso <= 0 || expMs == null || expMs <= 0.0) {
+            toast("请先在界面填写有效的 ISO 和曝光时间，再抓拍测试")
+            return
+        }
+        ensureCameraPermission {
+            logUi("抓拍测试中…")
+            runInBg {
+                val session = captureSession ?: throw IllegalStateException("会话未就绪")
+                val reader = imageReader ?: throw IllegalStateException("ImageReader 未就绪")
+                val latch = CountDownLatch(1)
+                var shot: Image? = null
+                reader.setOnImageAvailableListener({ ir ->
+                    val im = ir.acquireNextImage()
+                    if (im != null) { shot?.close(); shot = im; latch.countDown() }
+                }, cbHandler)
+                // 手动模式：与正式采集完全一致的锁定项（AE/AF 关闭、黑电平锁定）
+                val cc = characteristics ?: throw IllegalStateException("相机未就绪")
+                // 拍前校验：ISO/曝光超出设备能力范围直接告警（硬件会静默钳位）
+                val reqNs = (expMs * 1000000).toLong()
+                var preWarn = ""
+                val isoR = cc.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+                if (isoR != null && (iso < isoR.lower || iso > isoR.upper))
+                    preWarn += "\n⚠ ISO$iso 超出设备范围 ${isoR.lower}~${isoR.upper}，将被钳位"
+                val expR = cc.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+                if (expR != null && (reqNs < expR.lower || reqNs > expR.upper))
+                    preWarn += "\n⚠ 曝光 ${expMs}ms 超出设备范围 ${"%.1f".format(expR.lower / 1000000.0)}~${"%.1f".format(expR.upper / 1000000.0)}ms，将被钳位"
+                if (preWarn.isNotEmpty()) logUi("参数告警:$preWarn")
+                val req = session.device.createCaptureRequest(CameraDevice.TEMPLATE_MANUAL).apply {
+                    addTarget(reader.surface)
+                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+                    set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
+                    set(CaptureRequest.SENSOR_SENSITIVITY, iso)
+                    set(CaptureRequest.SENSOR_EXPOSURE_TIME, (expMs * 1000000).toLong())
+                    if (cc.availableCaptureRequestKeys.contains(CaptureRequest.BLACK_LEVEL_LOCK)) {
+                        set(CaptureRequest.BLACK_LEVEL_LOCK, true)
+                    }
+                }.build()
+                logUi("抓拍: 手动 ISO$iso ${expMs}ms")
+                var shotResult: TotalCaptureResult? = null
+                val capCb = object : CameraCaptureSession.CaptureCallback() {
+                    override fun onCaptureCompleted(s: CameraCaptureSession, request: CaptureRequest,
+                                                    result: TotalCaptureResult) { shotResult = result }
+                }
+                session.capture(req, capCb, cbHandler)
+                if (!latch.await(8, TimeUnit.SECONDS)) {
+                    reader.setOnImageAvailableListener(null, null)
+                    throw IllegalStateException("抓拍超时")
+                }
+                // 结果回调通常紧随图像，稍等片刻取 ISO/曝光
+                var waitMs = 0
+                while (shotResult == null && waitMs < 1000) { Thread.sleep(50); waitMs += 50 }
+                reader.setOnImageAvailableListener(null, null)
+                val img = shot ?: throw IllegalStateException("未取得图像")
+                try {
+                    val (mean, satFrac) = rawStats(img, 4)
+                    val bmp = rawToBitmap(img, 640)
+                    val actIso = shotResult?.get(CaptureResult.SENSOR_SENSITIVITY)
+                    val actExpNs = shotResult?.get(CaptureResult.SENSOR_EXPOSURE_TIME)
+                    var note = preWarn
+                    if (actIso != null && actIso != iso && !note.contains("ISO$iso "))
+                        note += "\n⚠ 请求 ISO$iso 超出设备范围，实际生效 ISO$actIso（范围 ${isoRangeStr()}）"
+                    if (actExpNs != null && kotlin.math.abs(actExpNs - reqNs) > reqNs / 20 && !note.contains("曝光 ${expMs}ms "))
+                        note += "\n⚠ 请求曝光 ${expMs}ms 超出设备范围，实际生效 ${"%.1f".format(actExpNs / 1000000.0)}ms（范围 ${expRangeStr()}）"
+                    showTestShot(bmp, mean, satFrac, actIso, actExpNs, note)
+                } finally {
+                    img.close()
+                }
+            }
+        }
+    }
+
+    /** 抽样统计：均值 DN 与接近白电平的饱和像素比例（step 为抽样间隔） */
+    protected fun rawStats(img: Image, step: Int): Pair<Double, Double> {
+        val plane = img.planes[0]
+        val buf = plane.buffer
+        val rowStride = plane.rowStride
+        val pixStride = plane.pixelStride
+        val w = img.width; val h = img.height
+        val satTh = whiteLevel() * 0.98
+        var sum = 0.0; var n = 0L; var sat = 0L
+        val row = ByteArray(rowStride)
+        var y = 0
+        while (y < h) {
+            buf.position(y * rowStride)
+            buf.get(row, 0, rowStride)
+            var x = 0
+            while (x < w) {
+                val off = x * pixStride
+                val v = (row[off].toInt() and 0xFF) or ((row[off + 1].toInt() and 0xFF) shl 8)
+                sum += v; n++
+                if (v >= satTh) sat++
+                x += step
+            }
+            y += step
+        }
+        return (if (n > 0) sum / n else 0.0) to (if (n > 0) sat.toDouble() / n else 0.0)
+    }
+
+    /** RAW 16-bit 灰度缩略图（按黑/白电平归一化，长边约 maxDim 像素） */
+    protected fun rawToBitmap(img: Image, maxDim: Int): Bitmap {
+        val plane = img.planes[0]
+        val buf = plane.buffer
+        val rowStride = plane.rowStride
+        val pixStride = plane.pixelStride
+        val w = img.width; val h = img.height
+        val step = max(1, max(w, h) / maxDim)
+        val bw = (w + step - 1) / step; val bh = (h + step - 1) / step
+        // 先采样原始值，再按 99.5% 分位数拉伸显示（传感器白电平远大于实际曝光，直接按白电平归一会全黑）
+        val vals = IntArray(bw * bh)
+        val row = ByteArray(rowStride)
+        var y = 0; var j = 0
+        while (y < h) {
+            buf.position(y * rowStride)
+            buf.get(row, 0, rowStride)
+            var x = 0; var i = 0
+            while (x < w && i < bw) {
+                val off = x * pixStride
+                vals[j * bw + i] = (row[off].toInt() and 0xFF) or ((row[off + 1].toInt() and 0xFF) shl 8)
+                x += step; i++
+            }
+            y += step; j++
+        }
+        val sorted = vals.sortedArray()
+        val hi = sorted[(sorted.size * 0.995).toInt().coerceIn(0, sorted.size - 1)]
+        val lo = minOf(blackLevel().toInt(), hi - 1)
+        val scale = 255.0 / max(1.0, (hi - lo).toDouble())
+        val pixels = IntArray(bw * bh)
+        for (k in vals.indices) {
+            var g = ((vals[k] - lo) * scale).toInt()
+            if (g < 0) g = 0 else if (g > 255) g = 255
+            pixels[k] = (0xFF shl 24) or (g shl 16) or (g shl 8) or g
+        }
+        return Bitmap.createBitmap(pixels, bw, bh, Bitmap.Config.ARGB_8888)
+    }
+
+    /** 弹窗显示缩略图与亮度结论 */
+    private fun showTestShot(bmp: Bitmap, mean: Double, satFrac: Double,
+                             iso: Int?, expNs: Long?, note: String = "") {
+        val black = blackLevel(); val white = whiteLevel()
+        val dyn = white - black
+        val verdict = when {
+            satFrac > 0.01 -> "过曝：${"%.1f".format(satFrac * 100)}% 像素接近白电平"
+            mean < black + dyn * 0.05 -> "太暗：均值不足动态范围 5%"
+            else -> "亮度正常"
+        }
+        val expo = "ISO ${iso?.toString() ?: "?"}，曝光 ${expNs?.let { "%.1f".format(it / 1000000.0) } ?: "?"} ms"
+        val detail = "$expo\n均值 ${"%.0f".format(mean)} DN（黑电平 ${"%.0f".format(black)}，白电平 ${"%.0f".format(white)}），饱和像素 ${"%.2f".format(satFrac * 100)}%"
+        logUi("抓拍: $verdict；$detail")
+        runOnUiThread {
+            val tv = TextView(this).apply { text = "$verdict\n$detail$note"; setPadding(40, 24, 40, 8) }
+            val iv = ImageView(this).apply { setImageBitmap(bmp); adjustViewBounds = true }
+            val box = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(tv); addView(iv)
+            }
+            AlertDialog.Builder(this).setTitle("抓拍测试").setView(box)
+                .setPositiveButton("关闭", null).show()
+        }
+    }
     // ---------------- UI 工具 ----------------
 
     protected fun logUi(msg: String) {

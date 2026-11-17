@@ -17,5 +17,8 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.btnDark).setOnClickListener {
             startActivity(Intent(this, DarkActivity::class.java))
         }
+        findViewById<Button>(R.id.btnFlat).setOnClickListener {
+            startActivity(Intent(this, FlatActivity::class.java))
+        }
     }
 }

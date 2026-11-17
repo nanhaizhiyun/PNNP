@@ -8,7 +8,7 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="GT 采集（干净图像，供去噪网络学习图像内容）\n输出: DarkFrameCollector/<时间戳>/gt/<模式>/<场景>/*.dng\n低光条件由训练时 PNNP 代理合成，GT 无需暗环境/长曝光"
+        android:text="GT 采集（干净图像，供去噪网络学习图像内容）\n输出: DarkFrameCollector/&lt;时间戳&gt;/gt/&lt;模式&gt;/&lt;场景&gt;/*.dng\n低光条件由训练时 PNNP 代理合成，GT 无需暗环境/长曝光"
         android:textSize="12sp" />
 
     <TextView
@@ -79,6 +79,12 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="模式预设" />
+        <Button
+            android:id="@+id/btnTest"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="抓拍测试" />
         <Button
             android:id="@+id/btnStart"
             android:layout_width="0dp"

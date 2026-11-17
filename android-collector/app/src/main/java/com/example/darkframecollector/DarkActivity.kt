@@ -8,7 +8,7 @@ import java.io.File
 import kotlin.math.max
 
 /**
- * 暗帧采集：ISO × 曝光网格逐档连拍，输出 bias/ISO{iso}/*.dng。
+ * 暗帧采集：ISO × 曝光网格逐档连拍，输出 bias/ISO{iso}/NNN.dng。
  * 对应 PNNP 训练代码 DarkFrameDataset 的目录约定。
  */
 class DarkActivity : BaseCaptureActivity() {
@@ -43,6 +43,7 @@ class DarkActivity : BaseCaptureActivity() {
             etFrames.setText("15")
         }
         btnStart.setOnClickListener { ensureCameraPermission { startCollection() } }
+        findViewById<Button>(R.id.btnTest).setOnClickListener { if (running) toast("采集中，无法抓拍") else captureTestShot(parseInts(etIsos.text.toString()).firstOrNull(), parseDoubles(etExposures.text.toString()).firstOrNull()) }
         btnStop.setOnClickListener { running = false }
     }
 
@@ -57,7 +58,7 @@ class DarkActivity : BaseCaptureActivity() {
         setUiRunning(true)
         running = true
         runInBg(onDone = { setUiRunning(false) }) {
-            logUi("ISO范围=$isoRangeStr 曝光范围=$expRangeStr 白电平=${whiteLevel().toInt()} 黑电平=${"%.1f".format(blackLevel())}")
+            logUi("ISO范围=${isoRangeStr()} 曝光范围=${expRangeStr()} 白电平=${whiteLevel().toInt()} 黑电平=${"%.1f".format(blackLevel())}")
             runCollection(isos, expsMs, frames)
         }
     }

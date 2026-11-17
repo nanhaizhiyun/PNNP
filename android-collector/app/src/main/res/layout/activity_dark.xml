@@ -8,7 +8,7 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="暗帧采集（需盖住镜头）\n输出: DarkFrameCollector/<时间戳>/bias/ISO{iso}/*.dng"
+        android:text="暗帧采集（需盖住镜头）\n输出: DarkFrameCollector/&lt;时间戳&gt;/bias/ISO{iso}/*.dng"
         android:textSize="13sp" />
 
     <TextView
@@ -56,6 +56,12 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="PNNP 预设" />
+        <Button
+            android:id="@+id/btnTest"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="抓拍测试" />
         <Button
             android:id="@+id/btnStart"
             android:layout_width="0dp"

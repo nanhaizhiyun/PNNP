@@ -14,10 +14,10 @@ import java.io.File
  * 两种模式：
  *  1. 暗室多帧平均 —— 暗环境下对同一场景以固定参数连拍 N 帧，
  *     后期对齐平均得到高 SNR GT（等效 SNR 提升 sqrt(N)）。
- *     输出 gt/burst_avg/<场景>/*.dng（整组 burst 供离线平均）。
+ *     输出 gt/burst_avg/<场景>/NNN.dng（整组 burst 供离线平均）。
  *  2. 亮环境低 ISO 直拍 —— 明亮环境低 ISO 短曝光直接拍，
  *     单帧即接近干净 GT，可连拍数帧择优/冗余。
- *     输出 gt/direct/<场景>/*.dng。
+ *     输出 gt/direct/<场景>/NNN.dng。
  *
  * 注意：GT 不需要是低光图像——低光条件由训练时 PNNP 代理在线合成。
  * 多帧平均的离线流程（暗帧校正 -> 对齐 -> 平均）在 PC 端进行。
@@ -68,6 +68,7 @@ class GtActivity : BaseCaptureActivity() {
             }
         }
         btnStart.setOnClickListener { ensureCameraPermission { startCapture() } }
+        findViewById<Button>(R.id.btnTest).setOnClickListener { if (running) toast("采集中，无法抓拍") else captureTestShot(etIso.text.toString().toIntOrNull(), etExposure.text.toString().toDoubleOrNull()) }
         btnStop.setOnClickListener { running = false }
     }
 
@@ -85,7 +86,7 @@ class GtActivity : BaseCaptureActivity() {
         setUiRunning(true)
         running = true
         runInBg(onDone = { setUiRunning(false) }) {
-            logUi("ISO范围=$isoRangeStr 曝光范围=$expRangeStr 白电平=${whiteLevel().toInt()} 黑电平=${"%.1f".format(blackLevel())}")
+            logUi("ISO范围=${isoRangeStr()} 曝光范围=${expRangeStr()} 白电平=${whiteLevel().toInt()} 黑电平=${"%.1f".format(blackLevel())}")
             val cc = characteristics ?: throw IllegalStateException("相机未就绪")
             val isoRange = cc.get(android.hardware.camera2.CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
                 ?: android.util.Range(100, 1600)
