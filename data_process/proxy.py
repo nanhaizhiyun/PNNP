@@ -17,6 +17,17 @@ def get_camera_proxy_params(camera_type=None):
         'sigRk':0.87611,  'sigRb':-2.11455,   'sigRsig':0.03274,
         'sigGsk':0.85187, 'sigGsb':0.67991,   'sigGssig':0.02921,
     }
+    cam_noisy_params['PNC460'] = { # Hytera PNC460, 10bit, 单原生ISO (ISO100-1550)
+        # K：PTC 光子转移标定（2026-11-18，平场数据 /root/chenbf/PNC460/flat），
+        # K(ISO) 非线性（K~1/ISO 后段趋平），用 K_table 精确插值；线性 K_k/K_b 仅作回退。
+        # 标定质量：逐 ISO R^2 = 0.98~0.9996，暗锚点与暗帧实测 sigma_read 一致。
+        'K_table': {100: 9.327, 200: 4.988, 400: 2.616, 800: 1.279, 1550: 1.052},
+        'K_k':0.0158, 'K_b':0, 'lam':-0.02, 'q':1/(2**10), 'wp':1023, 'bl':64,
+        'ISOmin':100, 'ISOmax':1550, 'tmin':1, 'tmax':240, # exposure time(ms)
+        # 像素读噪声先验由暗帧实测拟合: std(ISO) = [0.60, 0.94, 1.50, 2.55, 4.32] DN, log斜率~0.72
+        'sigRk':0.72,  'sigRb':-1.5,   'sigRsig':0.03,   # TODO: 行噪声无法从暗帧分离，粗估
+        'sigGsk':0.72, 'sigGsb':-0.84, 'sigGssig':0.03,
+    }
     cam_noisy_params['SonyA7S2_lowISO'] = {
         'K_k':0.0009546, 'K_b':-0.00193, 'lam':-0.026, 'q':1/(2**14), 'wp':16383, 'bl':512,
         'ISOmin':50, 'ISOmax':1600, 'tmin':10, 'tmax':100, # exposure time(ms)
@@ -48,6 +59,20 @@ def get_camera_proxy_params(camera_type=None):
         log(f'''Warning: we have not test the noisy parameters of camera "{camera_type}". Now we use IMX686's parameters to test.''')
         return cam_noisy_params['IMX686']
 
+def get_K(p, iso):
+    """shot noise 增益 K(e-/DN)。优先用 PTC 实测的 K_table（log-log 插值），
+    否则退回线性模型 K = K_k*iso - K_b。K_table 用于 K(ISO) 非线性的传感器。"""
+    if 'K_table' in p:
+        table = p['K_table']
+        isos = sorted(table)
+        if iso <= isos[0]: return table[isos[0]]
+        if iso >= isos[-1]: return table[isos[-1]]
+        li = np.searchsorted(isos, iso)
+        l, r = isos[li-1], isos[li]
+        w = (np.log(iso) - np.log(l)) / (np.log(r) - np.log(l))
+        return float(np.exp(np.log(table[l]) * (1-w) + np.log(table[r]) * w))
+    return p['K_k'] * iso - p['K_b']
+
 # 噪声参数采样
 def sample_params_proxy(camera_type='SonyA7S2', ln_ratio=False):
     choice = 1
@@ -68,7 +93,7 @@ def sample_params_proxy(camera_type='SonyA7S2', ln_ratio=False):
     log_t = np.random.uniform(low=np.log(p['tmin']), high=np.log(p['tmax']))
     iso = np.exp(log_ISO)
     t = np.exp(log_t)
-    K = p['K_k'] * iso - p['K_b'] # SonyA7S2
+    K = get_K(p, iso)
     log_K = np.log(K)
     mu_TL = p['sigTLk']*log_K + p['sigTLb'] if 'sigTLk' in p else q
     mu_R = p['sigRk']*log_K + p['sigRb'] if 'sigRk' in p else q
@@ -109,7 +134,7 @@ def sample_params_proxy_specificISO(camera_type='SonyA7S2', iso=1600):
     
     # 采样相机噪声参数(ISO, 曝光时间t_exp)
     t = 100
-    K = p['K_k'] * iso - p['K_b'] # SonyA7S2
+    K = get_K(p, iso)
     log_K = np.log(K)
     mu_TL = p['sigTLk']*log_K + p['sigTLb'] if 'sigTLk' in p else q
     mu_R = p['sigRk']*log_K + p['sigRb'] if 'sigRk' in p else q
