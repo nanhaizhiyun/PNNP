@@ -55,8 +55,14 @@ class RealBase_Dataset(Dataset):
             if 'darkshading' in self.args['command']:
                 self.get_darkshading(iso, naive=self.naive)
                 if 'darkshading2' in self.args['command'] and iso not in self.noiseparam:
-                    self.noiseparam[iso] = get_specific_noise_params(self.args['camera_type'], iso)
-                    self.noiseparam[iso]['Kmax'] = 0.0009563*iso
+                    # 相机无逐 ISO 噪声参数表时（如新接入的 sensor）返回 None，
+                    # 跳过评估扰动，避免崩溃
+                    params = get_specific_noise_params(self.args['camera_type'], iso)
+                    if params is not None:
+                        params['Kmax'] = 0.0009563*iso
+                        self.noiseparam[iso] = params
+                    else:
+                        self.noiseparam[iso] = None
 
     def lr_idremap_table_init(self):
         self.lr_idremap_table = [None] * self.length
@@ -362,7 +368,9 @@ class SID_Dataset(RealBase_Dataset):
             if 'd' in self.args['noise_code']:
                 lr_raw = lr_raw + self.get_darkshading(iso=data['ISO'], exp=data['exp'], naive=self.naive).mean()
             if 'darkshading2' in self.args['command'] and self.args["mode"] == 'train':
-                lr_raw += np.random.randn() * self.noiseparam[data['ISO']]['biassig']
+                np_ = self.noiseparam.get(data['ISO'])
+                if np_ is not None:
+                    lr_raw += np.random.randn() * np_['biassig']
         elif 'blc' in self.args['command'] and 'HB' not in self.args['command']:
             # 只使用均值矫正
             lr_raw = lr_raw - self.blc_mean[data['ISO']]
@@ -450,7 +458,9 @@ class Mix_Dataset(SID_Dataset):
         if 'darkshading' in self.args['command']:
             lr_raw = lr_raw - self.get_darkshading(iso=data['ISO'], exp=data['exp'], naive=self.naive)
             if 'darkshading2' in self.args['command'] and self.args["mode"] == 'train':
-                lr_raw += np.random.randn() * self.noiseparam[data['ISO']]['biassig']
+                np_ = self.noiseparam.get(data['ISO'])
+                if np_ is not None:
+                    lr_raw += np.random.randn() * np_['biassig']
         elif 'blc' in self.args['command']:
             # 只使用均值矫正
             lr_raw = lr_raw - self.blc_mean[data['ISO']]
@@ -554,7 +564,9 @@ class PMNNP_Dataset(SID_Dataset):
                 # SID配对数据训练的时候都要减长曝光的BLE（相机长曝光自动矫正FPN了）
                 # BLE = self.get_BLE_long(data['ISO'], data['ExposureTime'], self.naive) + self.blc_mean['kt_b_long'][data['ISO']]
                 # hr_raw = hr_raw - BLE
-                lr_raw += np.random.randn() * self.noiseparam[data['ISO']]['biassig']
+                np_ = self.noiseparam.get(data['ISO'])
+                if np_ is not None:
+                    lr_raw += np.random.randn() * np_['biassig']
         elif 'blc' in self.args['command']:
             # 只使用均值矫正
             lr_raw = lr_raw - self.blc_mean[data['ISO']]
