@@ -46,28 +46,39 @@ class MainActivity : Activity() {
             val cc = cm.getCameraCharacteristics(id)
             val caps = cc.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
 
-            val hasRawReprocess = caps.contains(
-                CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW_REPROCESS)
-            val hasYuvReprocess = caps.contains(
+            // 注意：Android 没有 RAW_REPROCESS 常量；raw 可塞回 = RAW 能力位
+            // + reprocess 输入格式包含 RAW_SENSOR
+            val hasRawCapability = caps.contains(
+                CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)
+            var hasYuvReprocess = caps.contains(
                 CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_YUV_REPROCESS)
             val hasPrivReprocess = caps.contains(
                 CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_PRIVATE_REPROCESS)
+
+            var inputFmts: IntArray? = null
+            if (Build.VERSION.SDK_INT >= 26) {
+                inputFmts = cc.get(CameraCharacteristics.SCALER_AVAILABLE_INPUT_FORMATS)
+            }
+            val hasRawReprocess = hasRawCapability &&
+                inputFmts != null && inputFmts.contains(ImageFormat.RAW_SENSOR)
+            if (inputFmts != null && inputFmts.contains(ImageFormat.YUV_420_888)) {
+                // 部分设备输入格式列出了 YUV 但未声明 YUV_REPROCESS 标志，以格式为准
+                hasYuvReprocess = true
+            }
 
             report.append("相机 ").append(id).append(":\n")
             report.append("  RAW_REPROCESS=").append(hasRawReprocess)
                 .append("  YUV_REPROCESS=").append(hasYuvReprocess)
                 .append("  PRIVATE_REPROCESS=").append(hasPrivReprocess).append('\n')
 
-            if (Build.VERSION.SDK_INT >= 26) {
-                val fmts = cc.get(CameraCharacteristics.SCALER_AVAILABLE_INPUT_FORMATS)
-                report.append("  输入格式: ").append(fmts?.joinToString {
-                    when (it) {
-                        ImageFormat.YUV_420_888 -> "YUV_420_888"
-                        ImageFormat.RAW_SENSOR -> "RAW_SENSOR"
-                        else -> "0x" + it.toString(16)
-                    }
-                }).append('\n')
-            }
+            report.append("  输入格式: ").append(inputFmts?.joinToString {
+                when (it) {
+                    ImageFormat.YUV_420_888 -> "YUV_420_888"
+                    ImageFormat.RAW_SENSOR -> "RAW_SENSOR"
+                    ImageFormat.PRIVATE -> "PRIVATE"
+                    else -> "0x" + it.toString(16)
+                }
+            }).append('\n')
 
             val level = cc.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
             report.append("  硬件等级: ").append(when (level) {
