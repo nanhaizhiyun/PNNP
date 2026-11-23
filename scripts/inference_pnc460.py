@@ -26,8 +26,13 @@ from utils import load_weights, raw2bayer
 WP, BL = 1023, 64          # PNC460 白/黑电平
 
 
-def pack2rgb(p4, wb):
-    """packed bayer (4,h,w) -> sRGB（双线性去马赛克 + 白平衡 + gamma，演示级）。"""
+def pack2rgb(p4, wb, gamma=None):
+    """packed bayer (4,h,w) -> sRGB（双线性去马赛克 + 白平衡 + gamma，演示级）。
+
+    gamma=None 时用 1/2.2 标准曲线；否则用给定值（<1 提亮暗部）。
+    """
+    if gamma is None:
+        gamma = 1 / 2.2
     r = p4[0]; g = (p4[1] + p4[3]) / 2; b = p4[2]
     h, w = r.shape
     rgb = np.zeros((h, w, 3))
@@ -37,7 +42,19 @@ def pack2rgb(p4, wb):
     rgb[1::2, 1::2] = np.stack([r[1::2, 1::2], g[1::2, 1::2], b[1::2, 1::2]], -1)
     rgb = cv2.resize(rgb, (w * 2, h * 2), interpolation=cv2.INTER_LINEAR)
     rgb *= np.array([wb[0], 1.0, wb[2]])
-    return np.clip(rgb, 0, 1) ** (1 / 2.2)
+    return np.clip(rgb, 0, 1) ** gamma
+
+
+def auto_gamma(img01, target_mean=0.42):
+    """自适应 gamma：按输出亮度估计提亮系数，暗图变亮、亮图不变。
+
+    高光保护会把整体压暗（正确做法，线性域保住了高光），显示阶段
+    用 gamma 提暗部——分工同真实 ISP 的 tone mapping。
+    """
+    mean = float(img01.mean())
+    if mean <= 0: return 1 / 2.2
+    gamma = np.log(target_mean) / np.log(mean)
+    return float(np.clip(gamma, 0.35, 1.0))
 
 
 def compute_gain(x, target=0.12, p=99.0, sat_limit=0.95, sat_frac_max=0.02,
@@ -101,12 +118,13 @@ def main():
         ratio, info = compute_gain(x, target=args.target)
         with torch.no_grad():
             pred = net(torch.from_numpy(x * ratio)[None].cuda()).clamp(0, 1)[0].cpu().numpy()
-        out_png = np.uint8(np.clip(pack2rgb(pred, wb), 0, 1)[..., ::-1] * 255)
+        g = auto_gamma(pred)
+        out_png = np.uint8(np.clip(pack2rgb(pred, wb, gamma=g), 0, 1)[..., ::-1] * 255)
         cv2.imwrite(os.path.join(args.output, f'{name}_denoised.png'), out_png)
         # 同步保存干净 raw（DN uint16，供下游 ISP 使用）
         raw_out = np.clip(pred / max(ratio, 1e-6), 0, 1) * (WP - BL)
         np.save(os.path.join(args.output, f'{name}_clean_raw.npy'), raw_out.astype(np.uint16))
-        print(f'{name}: ratio={ratio:.0f} ({info}) std={raw_std:.1f} -> 已保存')
+        print(f'{name}: ratio={ratio:.0f} ({info}) gamma={g:.2f} std={raw_std:.1f} -> 已保存')
 
 
 if __name__ == '__main__':
