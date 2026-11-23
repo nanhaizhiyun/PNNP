@@ -96,7 +96,13 @@ def main():
     ap.add_argument('--model', '-m', default='/root/chenbf/pnnp_out/checkpoints/PNC460/'
                                              'PNC460_on_CombGT_Kcal_Unet_best_model.pth')
     ap.add_argument('--target', '-t', type=float, default=0.12, help='增益目标（分位数值）')
+    ap.add_argument('--ratio', '-r', type=float, default=0.0,
+                    help='固定增益覆盖（>0 时禁用自动增益。极低照度下自动增益会选过低值'
+                         '（分布外），实测 raw 噪声 std≈5DN 的极限场景 40-80 效果最佳）')
+    ap.add_argument('--wb', choices=['camera', 'grayworld'], default='camera',
+                    help='显示白平衡：camera=DNG 元数据（默认），grayworld=灰世界（校正色偏）')
     ap.add_argument('--no-signal-guard', action='store_true', help='关闭零信号护栏（默认开启）')
+    args = ap.parse_args()
     ap.add_argument('--no-soft-clip', action='store_true', help='关闭输入高光软削顶（默认开启）')
     ap.add_argument('--bypass-thr', type=float, default=0.85,
                     help='高光旁路阈值：输入(增益后)高于此值的像素直接透传，设 1.0 关闭')
@@ -128,7 +134,10 @@ def main():
                   f'跳过处理（请确认镜头有光进入）。可用 --no-signal-guard 强制处理')
             continue
 
-        ratio, info = compute_gain(x, target=args.target)
+        if args.ratio > 0:
+            ratio, info = args.ratio, f'手动固定 ratio={args.ratio:.0f}'
+        else:
+            ratio, info = compute_gain(x, target=args.target)
         xin = x * ratio
         # 高光补丁1：输入软削顶，消除硬削顶边缘（网络在该状态无训练覆盖）
         xin_net = soft_clip_highlights(xin) if not args.no_soft_clip else np.clip(xin, 0, 1)
@@ -140,7 +149,12 @@ def main():
             bright = xin > args.bypass_thr
             pred = np.where(bright, np.clip(xin, 0, 1), pred)
         g = auto_gamma(pred)
-        out_png = np.uint8(np.clip(pack2rgb(pred, wb, gamma=g), 0, 1)[..., ::-1] * 255)
+        wb_show = wb
+        if args.wb == 'grayworld':
+            r_ch = float(pred[0].mean()); g_ch = float((pred[1].mean() + pred[3].mean()) / 2)
+            b_ch = float(pred[2].mean())
+            wb_show = np.array([g_ch / max(r_ch, 1e-4), 1.0, g_ch / max(b_ch, 1e-4)])
+        out_png = np.uint8(np.clip(pack2rgb(pred, wb_show, gamma=g), 0, 1)[..., ::-1] * 255)
         cv2.imwrite(os.path.join(args.output, f'{name}_denoised.png'), out_png)
         # 同步保存干净 raw（DN uint16，供下游 ISP 使用）
         raw_out = np.clip(pred / max(ratio, 1e-6), 0, 1) * (WP - BL)
