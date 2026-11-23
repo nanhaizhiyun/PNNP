@@ -57,6 +57,16 @@ def auto_gamma(img01, target_mean=0.42):
     return float(np.clip(gamma, 0.35, 1.0))
 
 
+def soft_clip_highlights(x, knee=0.75, top=0.97):
+    """输入高光软削顶：硬削顶的边缘（某像素 1.0、邻居 0.3）会诱发网络
+    过冲/色边（B/C 模型训练集中不存在该状态）。用 tanh 在 knee 以上平滑
+    压缩到 top，消除硬边。线性区（<knee）不受影响。"""
+    out = x.copy()
+    mask = x > knee
+    out[mask] = knee + (top - knee) * np.tanh((x[mask] - knee) / (top - knee))
+    return out
+
+
 def compute_gain(x, target=0.12, p=99.0, sat_limit=0.95, sat_frac_max=0.02,
                  ratio_min=2.0, ratio_max=300.0):
     """分位数增益 + HDR 高光保护。返回 (ratio, 信息串)。
@@ -87,6 +97,9 @@ def main():
                                              'PNC460_on_CombGT_Kcal_Unet_best_model.pth')
     ap.add_argument('--target', '-t', type=float, default=0.12, help='增益目标（分位数值）')
     ap.add_argument('--no-signal-guard', action='store_true', help='关闭零信号护栏（默认开启）')
+    ap.add_argument('--no-soft-clip', action='store_true', help='关闭输入高光软削顶（默认开启）')
+    ap.add_argument('--bypass-thr', type=float, default=0.85,
+                    help='高光旁路阈值：输入(增益后)高于此值的像素直接透传，设 1.0 关闭')
     args = ap.parse_args()
 
     net = load_weights(
@@ -116,15 +129,24 @@ def main():
             continue
 
         ratio, info = compute_gain(x, target=args.target)
+        xin = x * ratio
+        # 高光补丁1：输入软削顶，消除硬削顶边缘（网络在该状态无训练覆盖）
+        xin_net = soft_clip_highlights(xin) if not args.no_soft_clip else np.clip(xin, 0, 1)
         with torch.no_grad():
-            pred = net(torch.from_numpy(x * ratio)[None].cuda()).clamp(0, 1)[0].cpu().numpy()
+            pred = net(torch.from_numpy(xin_net)[None].cuda()).clamp(0, 1)[0].cpu().numpy()
+        # 高光补丁2：亮像素旁路——足够亮的区域信噪比高、噪声不可见，
+        # 直接透传输入，不经网络（避免模型在高光区的过冲幻觉）
+        if args.bypass_thr < 1.0:
+            bright = xin > args.bypass_thr
+            pred = np.where(bright, np.clip(xin, 0, 1), pred)
         g = auto_gamma(pred)
         out_png = np.uint8(np.clip(pack2rgb(pred, wb, gamma=g), 0, 1)[..., ::-1] * 255)
         cv2.imwrite(os.path.join(args.output, f'{name}_denoised.png'), out_png)
         # 同步保存干净 raw（DN uint16，供下游 ISP 使用）
         raw_out = np.clip(pred / max(ratio, 1e-6), 0, 1) * (WP - BL)
         np.save(os.path.join(args.output, f'{name}_clean_raw.npy'), raw_out.astype(np.uint16))
-        print(f'{name}: ratio={ratio:.0f} ({info}) gamma={g:.2f} std={raw_std:.1f} -> 已保存')
+        print(f'{name}: ratio={ratio:.0f} ({info}) gamma={g:.2f} '
+              f'旁路={float((xin > args.bypass_thr).mean()) * 100:.1f}% std={raw_std:.1f} -> 已保存')
 
 
 if __name__ == '__main__':
