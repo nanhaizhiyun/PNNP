@@ -23,6 +23,9 @@ def get_camera_proxy_params(camera_type=None):
         # 标定质量：逐 ISO R^2 = 0.98~0.9996，暗锚点与暗帧实测 sigma_read 一致。
         'K_table': {100: 9.327, 200: 4.988, 400: 2.616, 800: 1.279, 1550: 1.052},
         'K_k':0.0158, 'K_b':0, 'lam':-0.02, 'q':1/(2**10), 'wp':1023, 'bl':64,
+        # ratio 范围决定训练 SNR（推理侧实测 40-80）。默认 20-80 与部署一致，
+        # 使模型学会保留细节；旧的 100-300 会在训练中过度平滑
+        'ratio_min':20, 'ratio_max':80,
         'ISOmin':100, 'ISOmax':1550, 'tmin':1, 'tmax':240, # exposure time(ms)
         # 像素读噪声先验由暗帧实测拟合: std(ISO) = [0.60, 0.94, 1.50, 2.55, 4.32] DN, log斜率~0.72
         'sigRk':0.72,  'sigRb':-1.5,   'sigRsig':0.03,   # TODO: 行噪声无法从暗帧分离，粗估
@@ -108,12 +111,17 @@ def sample_params_proxy(camera_type='SonyA7S2', ln_ratio=False):
     bias = p['bias'] if 'bias' in p else 0
 
     # 模拟曝光衰减的系数, ln_ratio模式会照顾弱噪声场景, 更有通用性
+    # 相机可自定义 ratio 范围（cam_noisy_params['<cam>']['ratio_min'/'ratio_max']）：
+    # 该范围决定训练 SNR。范围偏小（如 20-80）→ 训练 SNR 更高，接近推理侧，
+    # 模型学到"保留更多细节"而非一味平滑
+    rmin = p.get('ratio_min', 1 if camera_type == 'IMX686' else 100)
+    rmax = p.get('ratio_max', 16 if camera_type == 'IMX686' else 300)
     if ln_ratio:
         high = 1 if 'CRVD' in camera_type else 5
         log_ratio = np.random.uniform(low=-0.01, high=high)
         ratio = np.exp(log_ratio) # np.random.uniform(low=1, high=200) if choice else np.exp(log_ratio)
     else:
-        ratio = np.random.uniform(low=1, high=16) if camera_type=='IMX686' else np.random.uniform(low=100, high=300)
+        ratio = np.random.uniform(low=rmin, high=rmax)
         
     return {'K':K, 'ISO':iso, 'exp':t, 'sigTL':sigTL, 'sigR':sigR, 'sigGs':sigGs,
             'lam':lam,'q':q, 'ratio':ratio, 'wp':wp, 'bl':bl, 'bias':bias}
