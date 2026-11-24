@@ -24,10 +24,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from archs.Unet import UNetSeeInDark
 
 
-def build_keras_unet(size, in_nc=4, out_nc=4, nf=32):
-    """与 archs/Unet.UNetSeeInDark 完全同构（NHWC）。"""
+def build_keras_unet(h, w=None, in_nc=4, out_nc=4, nf=32):
+    """与 archs/Unet.UNetSeeInDark 完全同构（NHWC）。h,w 需能被 16 整除。"""
+    if w is None:
+        w = h
     L = keras.layers
-    inp = keras.Input(shape=(size, size, in_nc), name='input')
+    inp = keras.Input(shape=(h, w, in_nc), name='input')
 
     def conv(x, f, k=3, name=''):
         return L.Conv2D(f, k, strides=1, padding='same', use_bias=True, name=name)(x)
@@ -83,7 +85,7 @@ def transfer_weights(pt_sd, kmodel):
         raise RuntimeError(f'缺少层: {missing}')
 
 
-def representative_dataset(size, n=120, camera='PNC460'):
+def representative_dataset(h, w, n=120, camera='PNC460'):
     """用项目真实的噪声合成分布做 int8 校准（而不是随机均匀噪声）。"""
     import rawpy, glob
     from utils import raw2bayer
@@ -103,23 +105,41 @@ def representative_dataset(size, n=120, camera='PNC460'):
     net.ds_b = torch.from_numpy(dataload('/root/chenbf/PNC460/resources/darkshading_lowISO_b.npy').astype(np.float32))
     net.pack_ds(); net.eval()
 
+    # 校准样本：尺寸能放进真实 PNC460 帧时直接用真实噪声 raw（最贴近部署分布），
+    # 否则用 Sony GT 合成
+    REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    real = sorted(glob.glob(os.path.join(REPO, 'raw_snap/lux*/SNAP_*.dng')))[:6]
+    use_real = (h, w) == (1536, 2048) and len(real) > 0
+    if use_real:
+        samples = []
+        for pth in real:
+            rr = rawpy.imread(pth)
+            pk = raw2bayer(rr.raw_image_visible.astype(np.float32), norm=False)
+            x = np.clip((pk - BL) / (WP - BL), 0, 1) * 60.0
+            x = np.clip(x, 0, 1)
+            samples.append(torch.from_numpy(x))          # (4,h,w)
+        def gen_real():
+            for i in range(n):
+                yield [samples[i % len(samples)].numpy().transpose(1, 2, 0)[None].astype(np.float32)]
+        return gen_real
+
     gts = sorted(glob.glob('/root/chenbf/SID/Sony/long/0*.ARW'))[:20]
     patches = []
     for p in gts:
         raw = np.array(rawpy.imread(p).raw_image_visible).reshape(2848, 4256).astype(np.float32)
-        pk = raw2bayer(raw, wp=16383, bl=512, norm=True, clip=True)[:, 800:800+size, 800:800+size]
-        patches.append(torch.from_numpy(pk))  # (4,S,S)，与训练时 imgs_lr[i] 一致
+        pk = raw2bayer(raw, wp=16383, bl=512, norm=True, clip=True)[:, 800:800+h, 800:800+w]
+        patches.append(torch.from_numpy(pk))  # (4,h,w)，与训练时 imgs_lr[i] 一致
     rng = np.random.default_rng(0)
     def gen():
         for i in range(n):
             gt = patches[i % len(patches)]
             prm = sample_params_proxy(camera_type=camera)
             prm['ISO'] = float(np.clip(prm['ISO'], 100, 1550))
-            prm['shape'] = (4, 1, size, size); prm['device'] = 'cpu'
+            prm['shape'] = (4, 1, h, w); prm['device'] = 'cpu'
             with torch.no_grad():
                 ny = generate_noisy_proxy(net, y=gt, param=prm, noise_code='pr',
                                           ori=False, camera_type=camera)
-            arr = np.clip(ny.numpy(), 0, 1).transpose(1, 2, 0)[None]  # (4,S,S)->(1,S,S,4)
+            arr = np.clip(ny.numpy(), 0, 1).transpose(1, 2, 0)[None]  # (4,h,w)->(1,h,w,4)
             yield [arr.astype(np.float32)]
     return gen
 
@@ -129,9 +149,15 @@ def main():
     ap.add_argument('--ckpt', default='/root/chenbf/pnnp_out/checkpoints/PNC460/'
                                       'PNC460_on_CombGT_Kcal_Unet_best_model.pth')
     ap.add_argument('--out', default='/filesdir/chenbf/PNNP/deploy/pnc460')
-    ap.add_argument('--size', type=int, default=512)
+    ap.add_argument('--size', type=int, default=512, help='方形尺寸（--height/--width 优先）')
+    ap.add_argument('--height', type=int, default=0)
+    ap.add_argument('--width', type=int, default=0)
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
+    H = args.height or args.size
+    W = args.width or args.size
+    assert H % 16 == 0 and W % 16 == 0, 'H/W 必须能被 16 整除（4 次下采样）'
+    TAG = f'{H}x{W}'
     report = []
 
     # ---- 1) 载入 PyTorch 权重 ----
@@ -143,12 +169,12 @@ def main():
     report.append(f'参数量: {nparam:,}  ({nparam*4/1e6:.1f} MB fp32)')
 
     # ---- 2) Keras 重建 + 权重迁移 ----
-    km = build_keras_unet(args.size)
+    km = build_keras_unet(H, W)
     transfer_weights(pt.state_dict(), km)
-    report.append(f'Keras 模型输入 (1,{args.size},{args.size},4)，层数 {len(km.layers)}')
+    report.append(f'Keras 模型输入 (1,{H},{W},4)，层数 {len(km.layers)}')
 
     # ---- 3) 数值校验 ----
-    x = np.random.default_rng(0).random((1, 4, args.size, args.size), dtype=np.float32)
+    x = np.random.default_rng(0).random((1, 4, H, W), dtype=np.float32)
     with torch.no_grad():
         y_pt = pt(torch.from_numpy(x)).numpy()                      # (1,4,H,W)
     y_tf = km(x.transpose(0, 2, 3, 1))                              # (1,H,W,4)
@@ -165,29 +191,29 @@ def main():
 
     # ---- 4) float32 ----
     conv = tf.lite.TFLiteConverter.from_keras_model(km)
-    save(conv.convert(), f'unet_{args.size}_fp32.tflite')
+    save(conv.convert(), f'unet_{TAG}_fp32.tflite')
 
     # ---- 5) float16（权重半精度，速度/体积折中，精度几乎无损）----
     conv = tf.lite.TFLiteConverter.from_keras_model(km)
     conv.optimizations = [tf.lite.Optimize.DEFAULT]
     conv.target_spec.supported_types = [tf.float16]
-    save(conv.convert(), f'unet_{args.size}_fp16.tflite')
+    save(conv.convert(), f'unet_{TAG}_fp16.tflite')
 
     # ---- 6) int8（真实噪声分布校准）----
     conv = tf.lite.TFLiteConverter.from_keras_model(km)
     conv.optimizations = [tf.lite.Optimize.DEFAULT]
-    conv.representative_dataset = representative_dataset(args.size)
+    conv.representative_dataset = representative_dataset(H, W)
     conv.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
     conv.inference_input_type = tf.float32     # 保持 float I/O，内部 int8
     conv.inference_output_type = tf.float32
-    save(conv.convert(), f'unet_{args.size}_int8.tflite')
+    save(conv.convert(), f'unet_{TAG}_int8.tflite')
 
     # ---- 7) 精度与速度实测 ----
     report.append('')
     report.append('量化精度对比（同一输入，相对 fp32 的 PSNR）:')
     ref = y_tf
     for tag in ['fp32', 'fp16', 'int8']:
-        p = os.path.join(args.out, f'unet_{args.size}_{tag}.tflite')
+        p = os.path.join(args.out, f'unet_{TAG}_{tag}.tflite')
         it = tf.lite.Interpreter(model_path=p, num_threads=4)
         it.allocate_tensors()
         inp = it.get_input_details()[0]; outd = it.get_output_details()[0]
@@ -198,7 +224,7 @@ def main():
         mse = float(((y - ref) ** 2).mean())
         psnr = 10 * np.log10(1.0 / max(mse, 1e-12))
         report.append(f'  {tag:5s}: 与 fp32 差异 PSNR={psnr:6.2f} dB   本机 CPU 单次 {dt*1000:6.1f} ms '
-                      f'({args.size}x{args.size})')
+                      f'({H}x{W})')
 
     txt = '\n'.join(report)
     print(txt)

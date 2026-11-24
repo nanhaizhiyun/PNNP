@@ -41,10 +41,18 @@ def main():
     m = x > knee
     x[m] = knee + (top - knee) * np.tanh((x[m] - knee) / (top - knee))
 
-    size = 512
-    ch, cw = x.shape[1] // 2, x.shape[2] // 2
-    crop = np.ascontiguousarray(x[:, ch - size // 2:ch + size // 2,
-                                   cw - size // 2:cw + size // 2])   # (4,S,S)
+    # 按 TFLite 输入尺寸决定裁剪还是整幅
+    it0 = tf.lite.Interpreter(model_path=args.tflite)
+    it0.allocate_tensors()
+    H, W = it0.get_input_details()[0]['shape'][1:3]
+    if (H, W) == x.shape[1:]:
+        crop = np.ascontiguousarray(x)
+        print(f'使用整幅输入 {H}x{W}')
+    else:
+        ch, cw = x.shape[1] // 2, x.shape[2] // 2
+        crop = np.ascontiguousarray(x[:, ch - H // 2:ch + H // 2,
+                                       cw - W // 2:cw + W // 2])
+        print(f'使用中心裁剪 {H}x{W}')
 
     # ---- PyTorch ----
     pt = UNetSeeInDark({'in_nc': 4, 'out_nc': 4, 'nf': 32, 'nframes': 1, 'use_dpsv': False,
@@ -72,7 +80,7 @@ def main():
     mse = float((diff ** 2).mean())
     psnr = 10 * np.log10(1.0 / max(mse, 1e-12))
     print(f'真实数据一致性: max|diff|={diff.max():.2e}  mean={diff.mean():.2e}  PSNR={psnr:.2f} dB')
-    print(f'本机 CPU 单次推理: {dt*1000:.1f} ms ({size}x{size})')
+    print(f'本机 CPU 单次推理: {dt*1000:.1f} ms ({H}x{W})')
 
     # ---- 可视化 ----
     def save(p4, wb, name):
