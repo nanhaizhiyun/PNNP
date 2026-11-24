@@ -89,12 +89,39 @@ def chroma_denoise(rgb, strength):
     return ycbcr2rgb(Y, Cb_f * strength, Cr_f * strength)
 
 
+def chroma_denoise_display(rgb, strength):
+    """显示域色彩噪声抑制（正确的 ISP 位置：色调映射之后）。
+
+    为什么必须在 gamma 之后：gamma 是凹函数，会按比例放大低亮度处的
+    色度差异——在线性域压制到 35% 的残余色度，经 gamma 0.5 提亮后
+    在暗部又被放大约 2 倍，表现为紫色雾/色斑。真实 ISP 的 CNR 也
+    工作在 tone-mapped 的 YCbCr/Lab 域。
+    做法：Lab 域的 a*/b* 双边滤波（保边）后按 strength 缩放。
+    """
+    lab = cv2.cvtColor(np.uint8(np.clip(rgb, 0, 1) * 255), cv2.COLOR_RGB2LAB).astype(np.float32)
+    a = lab[..., 1] - 128.0
+    b = lab[..., 2] - 128.0
+    a = cv2.bilateralFilter(a.astype(np.float32), 5, 4.0, 3)
+    b = cv2.bilateralFilter(b.astype(np.float32), 5, 4.0, 3)
+    lab[..., 1] = 128.0 + a * strength
+    lab[..., 2] = 128.0 + b * strength
+    out = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB)
+    return out.astype(np.float32) / 255.0
+
+
 def auto_chroma_strength(raw_std):
-    """按输入信噪比决定色度保留强度：越接近噪声底越需要强去色。"""
-    if raw_std < 8:   return 0.35   # 极限暗光（≈噪声底）
-    if raw_std < 15:  return 0.6
-    if raw_std < 30:  return 0.8
-    return 1.0                      # 正常曝光不做色度压制
+    """按输入信噪比决定色度保留强度：越接近噪声底越需要强去色。
+
+    实测（PNC460，ISO1550）：raw std≈4.9 DN（0.2 lux）时，gamma 后的
+    色度噪声 a*/b* std 高达 7.1（约满量程 5.6%），若只压到 35% 仍余
+    2.5，人眼读作彩色雾。接近噪声底时必须近乎单色（真实 ISP 同样如此）。
+    """
+    if raw_std < 5:   return 0.18  # 噪声底（<0.3 lux）：近乎单色
+    if raw_std < 6:   return 0.22
+    if raw_std < 8:   return 0.30
+    if raw_std < 15:  return 0.50
+    if raw_std < 30:  return 0.80
+    return 1.0                     # 正常曝光不做色度压制
 
 
 def soft_clip_highlights(x, knee=0.75, top=0.97):
@@ -198,12 +225,14 @@ def main():
             r_ch = float(pred[0].mean()); g_ch = float((pred[1].mean() + pred[3].mean()) / 2)
             b_ch = float(pred[2].mean())
             wb_show = np.array([g_ch / max(r_ch, 1e-4), 1.0, g_ch / max(b_ch, 1e-4)])
-        # ISP 色彩噪声抑制：低光下色度信噪比远低于亮度，不压制即为彩色斑块
+        # ISP 色彩噪声抑制：低光下色度信噪比远低于亮度，不压制即为彩色斑块。
+        # 必须在色调映射之后做（见 chroma_denoise_display 注释）
         chroma = args.chroma if args.chroma >= 0 else auto_chroma_strength(raw_std)
         rgb = demosaic(pred, wb_show)
+        rgb = np.clip(rgb, 0, 1) ** g
         if chroma < 1.0:
-            rgb = chroma_denoise(rgb, chroma)
-        out_png = np.uint8(np.clip(np.clip(rgb, 0, 1) ** g, 0, 1)[..., ::-1] * 255)
+            rgb = chroma_denoise_display(rgb, chroma)
+        out_png = np.uint8(np.clip(rgb, 0, 1)[..., ::-1] * 255)
         cv2.imwrite(os.path.join(args.output, f'{name}_denoised.png'), out_png)
         # 同步保存干净 raw（DN uint16，供下游 ISP 使用）
         raw_out = np.clip(pred / max(ratio, 1e-6), 0, 1) * (WP - BL)
