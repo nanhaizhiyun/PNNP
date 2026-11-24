@@ -81,4 +81,10 @@
         android:text="检查设备是否支持把处理后的 raw 塞回原厂 ISP（Camera2 reprocess）"
         android:textSize="12sp"
         android:gravity="center" />
+    <Button
+        android:id="@+id/btnReprocess"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="reprocess 冒烟测试（raw 塞回 ISP）" />
 </LinearLayout>

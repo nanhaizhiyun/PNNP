@@ -91,7 +91,7 @@ class FlatActivity : BaseCaptureActivity() {
         setUiRunning(true)
         running = true
         runInBg(onDone = { setUiRunning(false) }) {
-            logUi("ISO范围=$isoRangeStr 曝光范围=$expRangeStr 白电平=${whiteLevel().toInt()} 黑电平=${"%.1f".format(blackLevel())}")
+            logUi("ISO范围=${isoRangeStr()} 曝光范围=${expRangeStr()} 白电平=${whiteLevel().toInt()} 黑电平=${"%.1f".format(blackLevel())}")
             logUi("对准均匀表面（白墙/匀光板），无纹理无阴影；环境光照在采集全程保持恒定")
             val cc = characteristics ?: throw IllegalStateException("相机未就绪")
             val isoRange = cc.get(android.hardware.camera2.CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)

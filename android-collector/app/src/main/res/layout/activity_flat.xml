@@ -8,7 +8,7 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="平场采集（PTC 标定 shot noise 增益 K）\n输出: DarkFrameCollector/<时间戳>/flat/ISO{iso}/*.dng\n对准均匀表面（白墙/匀光板），全程保持光照恒定"
+        android:text="平场采集（PTC 标定 shot noise 增益 K）\n输出: DarkFrameCollector/&lt;时间戳&gt;/flat/ISO{iso}/*.dng\n对准均匀表面（白墙/匀光板），全程保持光照恒定"
         android:textSize="12sp" />
 
     <TextView

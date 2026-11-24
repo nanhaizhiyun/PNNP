@@ -29,6 +29,9 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.btnFlat).setOnClickListener {
             startActivity(Intent(this, FlatActivity::class.java))
         }
+        findViewById<Button>(R.id.btnReprocess).setOnClickListener {
+            startActivity(Intent(this, ReprocessTestActivity::class.java))
+        }
         findViewById<Button>(R.id.btnCheck).setOnClickListener {
             val report = checkReprocessCapability(
                 getSystemService(CAMERA_SERVICE) as CameraManager)
