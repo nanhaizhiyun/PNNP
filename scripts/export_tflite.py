@@ -109,19 +109,27 @@ def representative_dataset(h, w, n=120, camera='PNC460'):
     # 否则用 Sony GT 合成
     REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     real = sorted(glob.glob(os.path.join(REPO, 'raw_snap/lux*/SNAP_*.dng')))[:6]
-    use_real = (h, w) == (1536, 2048) and len(real) > 0
-    if use_real:
+    # 真实 PNC460 帧能装下目标尺寸就从其中随机裁剪（最贴近部署分布）
+    if len(real) > 0:
+        rng0 = np.random.default_rng(0)
         samples = []
         for pth in real:
             rr = rawpy.imread(pth)
             pk = raw2bayer(rr.raw_image_visible.astype(np.float32), norm=False)
+            if pk.shape[1] < h or pk.shape[2] < w:
+                samples = []
+                break
             x = np.clip((pk - BL) / (WP - BL), 0, 1) * 60.0
             x = np.clip(x, 0, 1)
-            samples.append(torch.from_numpy(x))          # (4,h,w)
-        def gen_real():
-            for i in range(n):
-                yield [samples[i % len(samples)].numpy().transpose(1, 2, 0)[None].astype(np.float32)]
-        return gen_real
+            for _ in range(4):                            # 每帧取 4 个随机块
+                y0 = rng0.integers(0, pk.shape[1] - h + 1)
+                x0 = rng0.integers(0, pk.shape[2] - w + 1)
+                samples.append(np.ascontiguousarray(x[:, y0:y0+h, x0:x0+w]))
+        if samples:
+            def gen_real():
+                for i in range(n):
+                    yield [samples[i % len(samples)].transpose(1, 2, 0)[None].astype(np.float32)]
+            return gen_real
 
     gts = sorted(glob.glob('/root/chenbf/SID/Sony/long/0*.ARW'))[:20]
     patches = []
