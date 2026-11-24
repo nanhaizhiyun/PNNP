@@ -3,7 +3,6 @@
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
-import android.graphics.ImageFormat
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.os.Bundle
@@ -45,68 +44,48 @@ class MainActivity : Activity() {
             val cc = cm.getCameraCharacteristics(id)
             val caps = cc.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
 
-            // 注意：Android 没有 RAW_REPROCESS 常量；raw 可塞回 = RAW 能力位
-            // + reprocess 输入格式包含 RAW_SENSOR
+            // 注意：Android 没有 RAW_REPROCESS 能力常量；平台也不单独暴露
+            // "raw 可塞回"的开关。判定依据 = RAW 能力位 + 硬件等级（FULL/LEVEL_3
+            // 才可能支持 reprocess），最终必须以冒烟测试为准。
             val hasRawCapability = caps.contains(
                 CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)
-            var hasYuvReprocess = caps.contains(
+            val hasYuvReprocess = caps.contains(
                 CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_YUV_REPROCESSING)
             val hasPrivReprocess = caps.contains(
                 CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_PRIVATE_REPROCESSING)
 
-            // reprocess 输入格式：用字符串键读取
-            // （"android.scaler.availableInputOutputFormatsMap"，API 21 起支持 String 重载），
-            // 避免依赖具体常量名；取不到时优雅降级为"未知"
-            val fmtMap: android.hardware.camera2.params.StreamConfigurationMap? = try {
-                cc.get<android.hardware.camera2.params.StreamConfigurationMap>(
-                    "android.scaler.availableInputOutputFormatsMap")
-            } catch (e: Exception) { null }
-            val inputFmts: IntArray? = try { fmtMap?.inputFormats } catch (e: Exception) { null }
-            val hasRawReprocess = hasRawCapability &&
-                inputFmts != null && inputFmts.contains(ImageFormat.RAW_SENSOR)
-            if (inputFmts != null && inputFmts.contains(ImageFormat.YUV_420_888)) {
-                // 部分设备输入格式列出了 YUV 但未声明 YUV_REPROCESS 标志，以格式为准
-                hasYuvReprocess = true
-            }
-
-            report.append("相机 ").append(id).append(":\n")
-            report.append("  RAW_REPROCESS=").append(hasRawReprocess)
-                .append("  YUV_REPROCESS=").append(hasYuvReprocess)
-                .append("  PRIVATE_REPROCESS=").append(hasPrivReprocess).append('\n')
-
-            report.append("  输入格式: ").append(inputFmts?.joinToString {
-                when (it) {
-                    ImageFormat.YUV_420_888 -> "YUV_420_888"
-                    ImageFormat.RAW_SENSOR -> "RAW_SENSOR"
-                    ImageFormat.PRIVATE -> "PRIVATE"
-                    else -> "0x" + it.toString(16)
-                }
-            } ?: "未知（该设备未提供）").append('\n')
-
             val level = cc.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
-            report.append("  硬件等级: ").append(when (level) {
-                CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY -> "LEGACY(不支持 reprocess)"
+            val levelName = when (level) {
+                CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY -> "LEGACY"
                 CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED -> "LIMITED"
                 CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL -> "FULL"
                 CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3 -> "LEVEL_3"
                 CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_EXTERNAL -> "EXTERNAL"
                 else -> level.toString()
-            }).append('\n')
+            }
+            val highLevel = level == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL ||
+                level == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3
+
+            report.append("相机 ").append(id).append(":\n")
+            report.append("  RAW 能力=").append(hasRawCapability)
+                .append("  YUV_REPROCESSING=").append(hasYuvReprocess)
+                .append("  PRIVATE_REPROCESSING=").append(hasPrivReprocess)
+                .append("  硬件等级=").append(levelName).append('\n')
+            if (hasRawCapability && highLevel) {
+                report.append("  -> 可能支持 raw reprocess（需冒烟验证）\n")
+            } else if (hasYuvReprocess) {
+                report.append("  -> 支持 YUV reprocess（clean raw 需先 demosaic 成 YUV）\n")
+            } else if (!hasPrivReprocess) {
+                report.append("  -> 未见 reprocess 能力，建议走 mini-ISP 自渲染\n")
+            }
         }
 
-        report.append('\n').append("结论: ")
-        val body = report.toString()
-        report.append(when {
-            body.contains("RAW_REPROCESS=true") ->
-                "支持 RAW 塞回 -> 路线一(最优)：clean raw 直接作 reprocess 输入"
-            body.contains("YUV_REPROCESS=true") ->
-                "支持 YUV 塞回 -> 路线一：clean raw 先自 demosaic 成 YUV 再塞回"
-            body.contains("PRIVATE_REPROCESS=true") ->
-                "仅私有格式 -> 需查厂商文档确认格式值，或走路线二"
-            else ->
-                "不支持 reprocess -> 路线二：App 内 mini-ISP 自渲染闭环"
-        })
-        report.append("\n\n注意：声明支持仍需跑一次完整 reprocess 冒烟验证（部分设备声明与实际不符）。")
+        report.append('\n').append(
+            "说明：\n" +
+            "  · 可能支持 raw reprocess  -> 路线一(最优)：clean raw 直接作 reprocess 输入\n" +
+            "  · 支持 YUV reprocess     -> 路线一：clean raw 先 demosaic 成 YUV 再塞回\n" +
+            "  · 仅私有格式/能力缺失    -> 路线二：App 内 mini-ISP 自渲染闭环\n" +
+            "  · 声明支持不等于可用，仍需跑一次完整 reprocess 冒烟验证")
         return report.toString()
     }
 }
