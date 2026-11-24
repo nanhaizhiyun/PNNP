@@ -5,11 +5,17 @@ import android.app.AlertDialog
 import android.content.Intent
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.widget.Button
 
 /** 入口：选择采集任务 */
 class MainActivity : Activity() {
+    companion object {
+        private const val TAG = "DarkFrameCollector"
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -26,6 +32,11 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.btnCheck).setOnClickListener {
             val report = checkReprocessCapability(
                 getSystemService(CAMERA_SERVICE) as CameraManager)
+            // 打印到 logcat（按行输出，避免单条日志被截断）
+            Log.i(TAG, "==== reprocess 能力自检 ====")
+            Log.i(TAG, "设备: ${Build.MANUFACTURER} ${Build.MODEL}  Android ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})")
+            report.lineSequence().forEach { Log.i(TAG, it) }
+            Log.i(TAG, "==== 能力自检结束 ====")
             AlertDialog.Builder(this)
                 .setTitle("reprocess 能力自检")
                 .setMessage(report)
