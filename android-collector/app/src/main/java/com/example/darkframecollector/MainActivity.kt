@@ -51,9 +51,9 @@ class MainActivity : Activity() {
             val hasRawCapability = caps.contains(
                 CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)
             var hasYuvReprocess = caps.contains(
-                CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_YUV_REPROCESS)
+                CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_YUV_REPROCESSING)
             val hasPrivReprocess = caps.contains(
-                CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_PRIVATE_REPROCESS)
+                CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_PRIVATE_REPROCESSING)
 
             var inputFmts: IntArray? = null
             if (Build.VERSION.SDK_INT >= 26) {
