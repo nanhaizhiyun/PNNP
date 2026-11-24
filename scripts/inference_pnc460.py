@@ -26,13 +26,8 @@ from utils import load_weights, raw2bayer
 WP, BL = 1023, 64          # PNC460 白/黑电平
 
 
-def pack2rgb(p4, wb, gamma=None):
-    """packed bayer (4,h,w) -> sRGB（双线性去马赛克 + 白平衡 + gamma，演示级）。
-
-    gamma=None 时用 1/2.2 标准曲线；否则用给定值（<1 提亮暗部）。
-    """
-    if gamma is None:
-        gamma = 1 / 2.2
+def demosaic(p4, wb=None):
+    """packed bayer (4,h,w) -> 线性 RGB（双线性去马赛克 + 可选白平衡）。"""
     r = p4[0]; g = (p4[1] + p4[3]) / 2; b = p4[2]
     h, w = r.shape
     rgb = np.zeros((h, w, 3))
@@ -41,8 +36,16 @@ def pack2rgb(p4, wb, gamma=None):
     rgb[1::2, 0::2] = np.stack([r[1::2, 0::2], g[1::2, 0::2], b[1::2, 0::2]], -1)
     rgb[1::2, 1::2] = np.stack([r[1::2, 1::2], g[1::2, 1::2], b[1::2, 1::2]], -1)
     rgb = cv2.resize(rgb, (w * 2, h * 2), interpolation=cv2.INTER_LINEAR)
-    rgb *= np.array([wb[0], 1.0, wb[2]])
-    return np.clip(rgb, 0, 1) ** gamma
+    if wb is not None:
+        rgb *= np.array([wb[0], 1.0, wb[2]])
+    return np.clip(rgb, 0, 1)
+
+
+def pack2rgb(p4, wb, gamma=None):
+    """packed bayer -> sRGB（去马赛克 + 白平衡 + gamma），无色彩噪声抑制的简版。"""
+    if gamma is None:
+        gamma = 1 / 2.2
+    return demosaic(p4, wb) ** gamma
 
 
 def auto_gamma(img01, target_mean=0.42):
@@ -53,8 +56,45 @@ def auto_gamma(img01, target_mean=0.42):
     """
     mean = float(img01.mean())
     if mean <= 0: return 1 / 2.2
-    gamma = np.log(target_mean) / np.log(mean)
+    gamma = np.log(target_mean) / np.log(max(mean, 1e-4))
     return float(np.clip(gamma, 0.35, 1.0))
+
+
+def rgb2ycbcr(x):
+    Y = 0.299 * x[..., 0] + 0.587 * x[..., 1] + 0.114 * x[..., 2]
+    Cb = -0.168736 * x[..., 0] - 0.331264 * x[..., 1] + 0.5 * x[..., 2]
+    Cr = 0.5 * x[..., 0] - 0.418688 * x[..., 1] - 0.081312 * x[..., 2]
+    return Y, Cb, Cr
+
+
+def ycbcr2rgb(Y, Cb, Cr):
+    R = Y + 1.402 * Cr
+    G = Y - 0.344136 * Cb - 0.714136 * Cr
+    B = Y + 1.772 * Cb
+    return np.clip(np.stack([R, G, B], -1), 0, 1)
+
+
+def chroma_denoise(rgb, strength):
+    """色彩噪声抑制（ISP 的 CNR 节点，低光必备）。
+
+    物理原因：CFA 中 R/B 各只有 1/4 像素，且需乘 WB 增益 1.7-2.1x，
+    低光下色度通道信噪比比亮度低一个量级——不处理就是彩色斑块。
+    做法：双边滤波色度（保边去噪）+ 按强度压饱和度。
+    strength=1.0 不处理；越小去色越强。
+    """
+    Y, Cb, Cr = rgb2ycbcr(rgb)
+    # 双边滤波：仅作用于色度，保留彩色边缘（棋盘格、色卡边界）
+    Cb_f = cv2.bilateralFilter(Cb.astype(np.float32), 5, 0.02 + 0.03 * (1 - strength), 3)
+    Cr_f = cv2.bilateralFilter(Cr.astype(np.float32), 5, 0.02 + 0.03 * (1 - strength), 3)
+    return ycbcr2rgb(Y, Cb_f * strength, Cr_f * strength)
+
+
+def auto_chroma_strength(raw_std):
+    """按输入信噪比决定色度保留强度：越接近噪声底越需要强去色。"""
+    if raw_std < 8:   return 0.35   # 极限暗光（≈噪声底）
+    if raw_std < 15:  return 0.6
+    if raw_std < 30:  return 0.8
+    return 1.0                      # 正常曝光不做色度压制
 
 
 def soft_clip_highlights(x, knee=0.75, top=0.97):
@@ -101,6 +141,10 @@ def main():
                          '（分布外），实测 raw 噪声 std≈5DN 的极限场景 40-80 效果最佳）')
     ap.add_argument('--wb', choices=['camera', 'grayworld'], default='camera',
                     help='显示白平衡：camera=DNG 元数据（默认），grayworld=灰世界（校正色偏）')
+    ap.add_argument('--chroma', type=float, default=-1.0,
+                    help='色度保留强度 0~1（<0 自动按 raw 噪声水平决定）：'
+                         '0=完全去色(灰度)，1=不处理。低光下色度通道基本是噪声，'
+                         '不压制即出现紫/彩色斑块')
     ap.add_argument('--no-signal-guard', action='store_true', help='关闭零信号护栏（默认开启）')
     args = ap.parse_args()
     ap.add_argument('--no-soft-clip', action='store_true', help='关闭输入高光软削顶（默认开启）')
@@ -154,12 +198,17 @@ def main():
             r_ch = float(pred[0].mean()); g_ch = float((pred[1].mean() + pred[3].mean()) / 2)
             b_ch = float(pred[2].mean())
             wb_show = np.array([g_ch / max(r_ch, 1e-4), 1.0, g_ch / max(b_ch, 1e-4)])
-        out_png = np.uint8(np.clip(pack2rgb(pred, wb_show, gamma=g), 0, 1)[..., ::-1] * 255)
+        # ISP 色彩噪声抑制：低光下色度信噪比远低于亮度，不压制即为彩色斑块
+        chroma = args.chroma if args.chroma >= 0 else auto_chroma_strength(raw_std)
+        rgb = demosaic(pred, wb_show)
+        if chroma < 1.0:
+            rgb = chroma_denoise(rgb, chroma)
+        out_png = np.uint8(np.clip(np.clip(rgb, 0, 1) ** g, 0, 1)[..., ::-1] * 255)
         cv2.imwrite(os.path.join(args.output, f'{name}_denoised.png'), out_png)
         # 同步保存干净 raw（DN uint16，供下游 ISP 使用）
         raw_out = np.clip(pred / max(ratio, 1e-6), 0, 1) * (WP - BL)
         np.save(os.path.join(args.output, f'{name}_clean_raw.npy'), raw_out.astype(np.uint16))
-        print(f'{name}: ratio={ratio:.0f} ({info}) gamma={g:.2f} '
+        print(f'{name}: ratio={ratio:.0f} ({info}) gamma={g:.2f} chroma={chroma:.2f} '
               f'旁路={float((xin > args.bypass_thr).mean()) * 100:.1f}% std={raw_std:.1f} -> 已保存')
 
 
