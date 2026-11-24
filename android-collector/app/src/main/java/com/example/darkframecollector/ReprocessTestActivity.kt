@@ -3,6 +3,7 @@ package com.example.darkframecollector
 import android.app.Activity
 import android.graphics.ImageFormat
 import android.hardware.camera2.*
+import android.hardware.camera2.params.InputConfiguration
 import android.media.Image
 import android.media.ImageReader
 import android.media.ImageWriter
