@@ -142,10 +142,13 @@ class ReprocessTestActivity : Activity() {
         // ---- 3) 可重处理会话 ----
         val inputCfg = InputConfiguration(size.width, size.height, ImageFormat.RAW_SENSOR)
         val repSession = createReprocessableSession(dev, inputCfg, listOf(jpegReader.surface))
-        log("③ 可重处理会话已建立, inputSurface=${repSession.inputSurface}")
+        // getInputSurface() 标注为可空：非可重处理会话时返回 null
+        val inSurface = repSession.inputSurface
+            ?: throw IllegalStateException("inputSurface 为 null（会话不是可重处理会话）")
+        log("③ 可重处理会话已建立, inputSurface 可用")
 
         // ---- 4) 把 raw 写入 inputSurface ----
-        val writer = ImageWriter.newInstance(repSession.inputSurface, 1)
+        val writer = ImageWriter.newInstance(inSurface, 1)
         val outImg = writer.dequeueInputImage()
             ?: throw IllegalStateException("dequeueInputImage 返回 null")
         if (outImg.width != size.width || outImg.height != size.height) {
