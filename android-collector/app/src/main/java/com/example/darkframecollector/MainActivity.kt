@@ -6,7 +6,6 @@ import android.content.Intent
 import android.graphics.ImageFormat
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
-import android.os.Build
 import android.os.Bundle
 import android.widget.Button
 
@@ -55,10 +54,14 @@ class MainActivity : Activity() {
             val hasPrivReprocess = caps.contains(
                 CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_PRIVATE_REPROCESSING)
 
-            var inputFmts: IntArray? = null
-            if (Build.VERSION.SDK_INT >= 26) {
-                inputFmts = cc.get(CameraCharacteristics.SCALER_AVAILABLE_INPUT_FORMATS)
-            }
+            // reprocess 输入格式：用字符串键读取
+            // （"android.scaler.availableInputOutputFormatsMap"，API 21 起支持 String 重载），
+            // 避免依赖具体常量名；取不到时优雅降级为"未知"
+            val fmtMap: android.hardware.camera2.params.StreamConfigurationMap? = try {
+                cc.get<android.hardware.camera2.params.StreamConfigurationMap>(
+                    "android.scaler.availableInputOutputFormatsMap")
+            } catch (e: Exception) { null }
+            val inputFmts: IntArray? = try { fmtMap?.inputFormats } catch (e: Exception) { null }
             val hasRawReprocess = hasRawCapability &&
                 inputFmts != null && inputFmts.contains(ImageFormat.RAW_SENSOR)
             if (inputFmts != null && inputFmts.contains(ImageFormat.YUV_420_888)) {
@@ -78,7 +81,7 @@ class MainActivity : Activity() {
                     ImageFormat.PRIVATE -> "PRIVATE"
                     else -> "0x" + it.toString(16)
                 }
-            }).append('\n')
+            } ?: "未知（该设备未提供）").append('\n')
 
             val level = cc.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
             report.append("  硬件等级: ").append(when (level) {
