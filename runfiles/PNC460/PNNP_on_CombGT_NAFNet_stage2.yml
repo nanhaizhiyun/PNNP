@@ -84,3 +84,4 @@ hyper:
   save_freq: 10
   plot_freq: 100
   best_psnr: 0
+  channels_last: True

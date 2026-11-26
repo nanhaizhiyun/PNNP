@@ -58,6 +58,10 @@ class PNNP_SID_Trainer(Base_Trainer):
         self.scheduler = LambdaScheduler(self.optimizer, self.lr_lambda)
 
         self.net = self.net.to(self.device)
+        # channels_last：逐通道算子（1x1 conv / depthwise / LayerNorm）在 NHWC 下更快、显存更省
+        self.use_channels_last = self.hyper.get('channels_last', False)
+        if self.use_channels_last:
+            self.net = self.net.to(memory_format=torch.channels_last)
         self.loss = Unet_Loss()
         self.corrector = IlluminanceCorrect()
         
@@ -467,6 +471,9 @@ class PNNP_SID_Trainer(Base_Trainer):
             lb = -np.inf if 'HB' in self.dst['command'] else 0
             imgs_lr = imgs_lr.clamp(lb, 1)
             imgs_hr = imgs_hr.clamp(0, 1)
+        if getattr(self, 'use_channels_last', False):
+            imgs_lr = imgs_lr.contiguous(memory_format=torch.channels_last)
+            imgs_hr = imgs_hr.contiguous(memory_format=torch.channels_last)
         return imgs_lr, imgs_hr, ratio
 
     def load_proxynet(self):

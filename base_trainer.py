@@ -59,6 +59,8 @@ class Base_Trainer():
 
     def initialization(self):
         os.environ["CUDA_VISIBLE_DEVICES"] = self.parser.gpu
+        # 输入尺寸固定（512x512 patch），让 cuDNN 自动选最快卷积算法
+        torch.backends.cudnn.benchmark = True
         with open(self.parser.runfile, 'r', encoding="utf-8") as f:
             self.args = yaml.load(f.read(), Loader=yaml.FullLoader)
         self.mode = self.args['mode'] if self.parser.mode is None else self.parser.mode
