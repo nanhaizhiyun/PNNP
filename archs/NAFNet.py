@@ -34,20 +34,20 @@ class SimpleGate(nn.Module):
 
 
 class NAFBlock(nn.Module):
-    def __init__(self, c, dw_expand=1, drop_out_rate=0.0):
+    def __init__(self, c, dw_expand=2, ffn_expand=2, drop_out_rate=0.0):
         super().__init__()
         dw_channel = c * dw_expand
         self.conv1 = nn.Conv2d(c, dw_channel, 1, 1, 0, bias=True)
-        self.conv2 = nn.Conv2d(dw_channel, dw_channel, 3, 1, 1, bias=True, groups=dw_channel)
+        self.conv2 = nn.Conv2d(dw_channel, dw_channel, 3, 1, 1, groups=dw_channel, bias=True)
         self.conv3 = nn.Conv2d(dw_channel // 2, c, 1, 1, 0, bias=True)
-        self.sg = SimpleGate()
         self.sca = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
             nn.Conv2d(dw_channel // 2, dw_channel // 2, 1, 1, 0, bias=True),
         )
-        self.conv4 = nn.Conv2d(c, c, 1, 1, 0, bias=True)
-        self.conv5 = nn.Conv2d(c, c * 2, 1, 1, 0, bias=True)
-        self.conv6 = nn.Conv2d(c, c, 1, 1, 0, bias=True)
+        self.sg = SimpleGate()
+        ffn_channel = ffn_expand * c
+        self.conv4 = nn.Conv2d(c, ffn_channel, 1, 1, 0, bias=True)
+        self.conv5 = nn.Conv2d(ffn_channel // 2, c, 1, 1, 0, bias=True)
         self.norm1 = LayerNorm2d(c)
         self.norm2 = LayerNorm2d(c)
         self.dropout1 = nn.Dropout(drop_out_rate) if drop_out_rate > 0 else nn.Identity()
@@ -66,9 +66,8 @@ class NAFBlock(nn.Module):
         y = inp + x * self.beta
 
         x = self.conv4(self.norm2(y))
-        x = self.conv5(x)
         x = self.sg(x)
-        x = self.conv6(x)
+        x = self.conv5(x)
         x = self.dropout2(x)
         return y + x * self.gamma
 
@@ -94,15 +93,15 @@ class NAFNet(nn.Module):
 
         chan = width
         for num in enc_blk_nums:
-            self.encoders.append(nn.Sequential(*[NAFBlock(chan) for _ in range(num)]))
+            self.encoders.append(nn.Sequential(*[NAFBlock(chan, self.args['dw_expand'], self.args['ffn_expand']) for _ in range(num)]))
             self.downs.append(nn.Conv2d(chan, 2 * chan, 2, 2))
             chan *= 2
-        self.middle_blks = nn.Sequential(*[NAFBlock(chan) for _ in range(middle_blk_num)])
+        self.middle_blks = nn.Sequential(*[NAFBlock(chan, self.args['dw_expand'], self.args['ffn_expand']) for _ in range(middle_blk_num)])
         for num in dec_blk_nums:
             self.ups.append(nn.Sequential(nn.Conv2d(chan, chan * 2, 1, bias=False),
                                           nn.PixelShuffle(2)))
             chan //= 2
-            self.decoders.append(nn.Sequential(*[NAFBlock(chan) for _ in range(num)]))
+            self.decoders.append(nn.Sequential(*[NAFBlock(chan, self.args['dw_expand'], self.args['ffn_expand']) for _ in range(num)]))
 
         self.padder_size = 2 ** len(enc_blk_nums)
 
@@ -112,6 +111,7 @@ class NAFNet(nn.Module):
             'enc_blk_nums': [2, 2, 4, 8],
             'middle_blk_num': 12,
             'dec_blk_nums': [2, 2, 2, 2],
+            'dw_expand': 2, 'ffn_expand': 2,
         }
         if args is not None:
             for k in args:
