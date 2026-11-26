@@ -27,7 +27,7 @@ BL, WP = 512, 16383
 SCENES = ['10003', '10006', '10011', '10016', '10022']
 
 
-def save_dng(path, raw_u16, black=BL, white=WP, make='SONY', model='ILCE-7S'):
+def save_dng(path, raw_u16, black=BL, white=WP, make='SONY', model='ILCE-7S', wb=None):
     """写 16-bit RGGB DNG（TIFF 容器 + DNG/CFA 标签）。"""
     extratags = [
         (271, 2, 0, make, True),                        # Make (ASCII)
@@ -43,6 +43,14 @@ def save_dng(path, raw_u16, black=BL, white=WP, make='SONY', model='ILCE-7S'):
         (50721, 5, 9, (1, 1, 0, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 1), True),
         (50778, 3, 1, 21, True),                        # CalibrationIlluminant1 = D65
     ]
+    if wb is not None:
+        # AsShotNeutral：告诉 raw 软件 R:G:B 的中性比值（=1/白平衡增益），
+        # 缺少该标签时渲染会按无白平衡处理 -> 画面偏绿
+        wn = (int(round(1.0 / wb[0] * 10000)), 10000,
+              1, 1,
+              int(round(1.0 / wb[2] * 10000)), 10000)
+        extratags.append((50728, 5, 3, wn, True))
+
     tifffile.imwrite(path, raw_u16, photometric='CFA', compression=None,
                      extratags=extratags, metadata=None)
 
@@ -70,6 +78,8 @@ def main():
         src = src[0]
         r = rawpy.imread(src)
         raw = r.raw_image_visible.astype(np.float32)
+        wb_cam = np.array(r.camera_whitebalance, dtype=np.float64)
+        wb_cam = wb_cam / wb_cam[1]          # (R, 1, B, 1)
         x = np.clip((raw2bayer(raw, norm=False) - BL) / (WP - BL), 0, 1)
         ratio, info = inf.compute_gain(x, ratio_min=args.ratio_min, ratio_max=args.ratio_max)
         xin = x * ratio
@@ -81,13 +91,19 @@ def main():
         # 保存为"放大域"（模型输出本身，与 SID 官方做法一致）：
         # raw = pred*(wp-bl)+bl。若需要原始曝光尺度，除以 ratio 即可
         raw_out = np.clip(pred, 0, 1) * (WP - BL) + BL
+        # 白平衡：模型输出的通道平衡已不等于源 ARW 的原始响应
+        # （网络学到的是"干净图"的平衡），因此按输出自身做灰世界，
+        # 写进 AsShotNeutral，保证任何 raw 软件打开都不偏色
+        rm = float(pred[0].mean()); gm = float((pred[1].mean() + pred[3].mean()) / 2)
+        bm = float(pred[2].mean())
+        wb_cam = np.array([gm / max(rm, 1e-6), 1.0, gm / max(bm, 1e-6), 1.0])
         packed = raw_out                                 # (4,h,w)
         H, W = packed.shape[1] * 2, packed.shape[2] * 2
         bayer = np.empty((H, W), dtype=np.float32)
         bayer[0::2, 0::2] = packed[0]; bayer[0::2, 1::2] = packed[1]
         bayer[1::2, 1::2] = packed[2]; bayer[1::2, 0::2] = packed[3]
         out_path = os.path.join(args.out, f'{scene}_denoised.dng')
-        save_dng(out_path, np.clip(bayer, 0, WP).astype(np.uint16))
+        save_dng(out_path, np.clip(bayer, 0, WP).astype(np.uint16), wb=wb_cam)
 
         # 立即回读验证
         chk = rawpy.imread(out_path)
