@@ -8,6 +8,7 @@ from .noise_flow import NoiseFlow
 from .Unet import *
 from .ResUnet import *
 from .PNNP import *
+from .NAFNet import *
 
 def initialize_weights(net):
     for m in net.modules():
