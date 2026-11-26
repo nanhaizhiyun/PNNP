@@ -108,7 +108,7 @@ def main():
     print('模型加载完成:', list(nets))
 
     datasets = {
-        'test_pnc460': (sorted(glob.glob(os.path.join(REPO, 'test_pnc460/*.dng'))), None),
+        'test_pnc460': (sorted(glob.glob('/filesdir/chenbf/test_pnc460/*.dng')), None),
         'raw_snap_lux0.2': (sorted(glob.glob(os.path.join(
             REPO, 'raw_snap/lux0.2/SNAP_*.dng')))[:1], args.raw_snap_ratio),
         'raw_snap_lux0.5': (sorted(glob.glob(os.path.join(
