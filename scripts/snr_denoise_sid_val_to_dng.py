@@ -27,7 +27,17 @@ BL, WP = 512, 16383
 SCENES = ['10003', '10006', '10011', '10016', '10022']
 
 
-def save_dng(path, raw_u16, black=BL, white=WP, make='SONY', model='ILCE-7S', wb=None):
+def _cm18(m):
+    """3x3 矩阵 -> TIFF RATIONAL 序列（18 个整数，分母 10000）。"""
+    if m is None:
+        m = np.eye(3)
+    vals = []
+    for v in np.asarray(m, dtype=np.float64).flatten():
+        vals += [int(round(v * 10000)), 10000]
+    return tuple(vals)
+
+
+def save_dng(path, raw_u16, black=BL, white=WP, make='SONY', model='ILCE-7S', wb=None, color_matrix=None):
     """写 16-bit RGGB DNG（TIFF 容器 + DNG/CFA 标签）。"""
     extratags = [
         (271, 2, 0, make, True),                        # Make (ASCII)
@@ -39,8 +49,8 @@ def save_dng(path, raw_u16, black=BL, white=WP, make='SONY', model='ILCE-7S', wb
         (50708, 2, 0, f'{make} {model}', True),         # UniqueCameraModel
         (50714, 5, 1, (int(black), 1), True),           # BlackLevel (RATIONAL)
         (50717, 5, 1, (int(white), 1), True),           # WhiteLevel
-        # ColorMatrix1：9 个 RATIONAL = 18 个整数（单位矩阵占位）
-        (50721, 5, 9, (1, 1, 0, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 1), True),
+        # ColorMatrix1：XYZ -> 相机原生，9 个 RATIONAL（18 个整数）
+        (50721, 10, 9, _cm18(color_matrix), True),   # SRATIONAL（含负值）
         (50778, 3, 1, 21, True),                        # CalibrationIlluminant1 = D65
     ]
     if wb is not None:
@@ -80,6 +90,12 @@ def main():
         raw = r.raw_image_visible.astype(np.float32)
         wb_cam = np.array(r.camera_whitebalance, dtype=np.float64)
         wb_cam = wb_cam / wb_cam[1]          # (R, 1, B, 1)
+        # DNG ColorMatrix1 = (camera->XYZ) 的逆，取自源 ARW 的真实色彩矩阵
+        try:
+            cam2xyz = np.array(r.rgb_xyz_matrix, dtype=np.float64)[:3, :3]
+            color_mat = np.linalg.inv(cam2xyz)
+        except Exception:
+            color_mat = None
         x = np.clip((raw2bayer(raw, norm=False) - BL) / (WP - BL), 0, 1)
         ratio, info = inf.compute_gain(x, ratio_min=args.ratio_min, ratio_max=args.ratio_max)
         xin = x * ratio
@@ -103,7 +119,7 @@ def main():
         bayer[0::2, 0::2] = packed[0]; bayer[0::2, 1::2] = packed[1]
         bayer[1::2, 1::2] = packed[2]; bayer[1::2, 0::2] = packed[3]
         out_path = os.path.join(args.out, f'{scene}_denoised.dng')
-        save_dng(out_path, np.clip(bayer, 0, WP).astype(np.uint16), wb=wb_cam)
+        save_dng(out_path, np.clip(bayer, 0, WP).astype(np.uint16), wb=wb_cam, color_matrix=color_mat)
 
         # 立即回读验证
         chk = rawpy.imread(out_path)
