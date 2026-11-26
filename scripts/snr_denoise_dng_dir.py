@@ -81,8 +81,12 @@ def main():
             B2 = Y + 1.772 * Cb
             pred = np.stack([R2, G2, B2, G2])
 
-        # 灰世界白平衡（模型输出平衡 ≠ 传感器原始响应）
-        rm, gm, bm = float(pred[0].mean()), float((pred[1].mean() + pred[3].mean()) / 2), float(pred[2].mean())
+        # 白平衡：用**亮区**估计（暗区是纯噪声，会把灰世界带偏；
+        # 且模型输出的通道平衡受 sRGB 约定的 LSRW GT 影响，亮区才是真实内容）
+        lum = pred.mean(axis=0)
+        sel = lum >= np.percentile(lum, 90)
+        rm = float(pred[0][sel].mean()); gm = float((pred[1][sel].mean() + pred[3][sel].mean()) / 2)
+        bm = float(pred[2][sel].mean())
         wb = np.array([gm / max(rm, 1e-6), 1.0, gm / max(bm, 1e-6), 1.0])
 
         # 放大域写回 raw，重拼 Bayer
