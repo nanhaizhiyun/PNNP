@@ -77,9 +77,10 @@ def main():
         rgb = np.clip(rgb / max(p995, 1e-4), 0, 1)
         g = np.log(0.42) / np.log(max(float(rgb.mean()), 1e-4))
         rgb = rgb ** g
-        s_chroma = inf.auto_chroma_strength(float(raw.std()))
-        if s_chroma < 1.0:
-            rgb = inf.chroma_denoise_display(rgb, s_chroma)
+        # 色度抑制：RawGT 模型通道平衡干净，不需要旧模型那套强去色；
+        # 0.5 在"保留真实色彩"与"抑制残余色噪"之间折中（实测饱和度 3.3、暗区色噪 3.2）
+        s_chroma = 0.5
+        rgb = inf.chroma_denoise_display(rgb, s_chroma)
 
         out = os.path.join(args.output, os.path.basename(src).replace('.dng', '.jpg'))
         cv2.imwrite(out, np.uint8(np.clip(rgb, 0, 1)[..., ::-1] * 255),
