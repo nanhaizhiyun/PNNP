@@ -31,16 +31,30 @@ def main():
     ap.add_argument('--output', '-o', required=True)
     ap.add_argument('--ckpt', default='/root/chenbf/pnnp_out/checkpoints/PNC460/'
                                       'PNC460_on_CombGT_SNR_Unet_best_model.pth')
+    ap.add_argument('--arch', default='unet', choices=['unet', 'nafnet'])
     ap.add_argument('--ratio', type=float, default=0.0, help='>0 时固定增益')
     ap.add_argument('--ratio-min', type=float, default=20.0)
     ap.add_argument('--ratio-max', type=float, default=80.0)
     args = ap.parse_args()
     os.makedirs(args.output, exist_ok=True)
 
-    net = load_weights(
-        UNetSeeInDark({'in_nc': 4, 'out_nc': 4, 'nf': 32, 'nframes': 1, 'use_dpsv': False,
-                       'res': False, 'cascade': False, 'add': False, 'lock_wb': False}),
-        torch.load(args.ckpt, map_location='cpu', weights_only=True), by_name=True).cuda().eval()
+    # 兼容两种 checkpoint：本仓库训练的纯 state_dict，
+    # 以及 SID 官方发布的 {'netG': ..., 'opt_g': ...} 存档
+    ck = torch.load(args.ckpt, map_location='cpu', weights_only=False)
+    if isinstance(ck, dict) and 'netG' in ck:
+        ck = ck['netG']
+    if args.arch == 'nafnet':
+        from archs.NAFNet import NAFNet
+        net = NAFNet({'in_nc': 4, 'out_nc': 4, 'nf': 32,
+                      'enc_blk_nums': [2, 2, 4, 8], 'middle_blk_num': 12,
+                      'dec_blk_nums': [2, 2, 2, 2]})
+        net.load_state_dict(ck, strict=True)
+        net = net.cuda().eval()
+    else:
+        net = load_weights(
+            UNetSeeInDark({'in_nc': 4, 'out_nc': 4, 'nf': 32, 'nframes': 1, 'use_dpsv': False,
+                           'res': False, 'cascade': False, 'add': False, 'lock_wb': False}),
+            ck, by_name=True).cuda().eval()
 
     files = sorted(glob.glob(os.path.join(args.input, '*.dng')))
     if not files:
