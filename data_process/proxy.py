@@ -77,7 +77,8 @@ def get_K(p, iso):
     return p['K_k'] * iso - p['K_b']
 
 # 噪声参数采样
-def sample_params_proxy(camera_type='SonyA7S2', ln_ratio=False):
+def sample_params_proxy(camera_type='SonyA7S2', ln_ratio=False, ratio_min=None, ratio_max=None):
+    """ratio_min/ratio_max：可选，覆盖相机默认的增益采样范围（由 runfile 传入）。"""
     choice = 1
     Dual_ISO_Cameras = ['SonyA7S2']
     if camera_type in Dual_ISO_Cameras:
@@ -116,6 +117,8 @@ def sample_params_proxy(camera_type='SonyA7S2', ln_ratio=False):
     # 模型学到"保留更多细节"而非一味平滑
     rmin = p.get('ratio_min', 1 if camera_type == 'IMX686' else 100)
     rmax = p.get('ratio_max', 16 if camera_type == 'IMX686' else 300)
+    if ratio_min is not None: rmin = ratio_min
+    if ratio_max is not None: rmax = ratio_max
     if ln_ratio:
         high = 1 if 'CRVD' in camera_type else 5
         log_ratio = np.random.uniform(low=-0.01, high=high)

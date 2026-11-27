@@ -407,7 +407,9 @@ class PNNP_SID_Trainer(Base_Trainer):
                 d = self.dst['patch_size']
                 for i in range(b):
                     if 'params' not in self.dst:
-                        noise_param = sample_params_proxy(camera_type=self.dst['camera_type'])
+                        noise_param = sample_params_proxy(camera_type=self.dst['camera_type'],
+                                                          ratio_min=self.dst.get('ratio_min'),
+                                                          ratio_max=self.dst.get('ratio_max'))
                     else:
                         noise_param = self.dst['params']
                     data['ratio'][i] = noise_param['ratio']
@@ -422,7 +424,9 @@ class PNNP_SID_Trainer(Base_Trainer):
                 data['ISO'] = torch.ones(b, dtype=torch.float32, device=self.device)
                 for i in range(b):
                     if 'params' not in self.dst:
-                        noise_param = sample_params_proxy(camera_type=self.dst['camera_type'])
+                        noise_param = sample_params_proxy(camera_type=self.dst['camera_type'],
+                                                          ratio_min=self.dst.get('ratio_min'),
+                                                          ratio_max=self.dst.get('ratio_max'))
                     else:
                         noise_param = self.dst['params']
                     data['ratio'][i] = noise_param['ratio']
